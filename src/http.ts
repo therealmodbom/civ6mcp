@@ -23,6 +23,11 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
 // closes a transport from its delete handler — so without an idle sweep every lost
 // client leaks a Server plus transport for the lifetime of the process.
 const SESSION_IDLE_MS = Number(process.env.MCP_SESSION_IDLE_MS ?? 30 * 60_000);
+if (!Number.isFinite(SESSION_IDLE_MS) || SESSION_IDLE_MS < 1_000) {
+  // NaN would make the sweep spin and expire nothing, quietly restoring the leak
+  console.error(`Invalid MCP_SESSION_IDLE_MS: ${JSON.stringify(process.env.MCP_SESSION_IDLE_MS)} (minimum 1000)`);
+  process.exit(1);
+}
 const SWEEP_INTERVAL_MS = Math.min(60_000, Math.max(1_000, SESSION_IDLE_MS / 2));
 
 const allowedHosts = [
@@ -38,6 +43,8 @@ const allowedOrigins = allowedHosts.flatMap((host) => [`http://${host}`, `https:
 interface Session {
   transport: StreamableHTTPServerTransport;
   lastSeen: number;
+  /** Requests still in flight, including a standalone SSE stream held open */
+  open: number;
 }
 
 // One MCP Server and transport per session — the SDK binds a Server to a single
@@ -51,7 +58,7 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
     allowedHosts,
     allowedOrigins,
     onsessioninitialized: (sessionId) => {
-      sessions.set(sessionId, { transport, lastSeen: Date.now() });
+      sessions.set(sessionId, { transport, lastSeen: Date.now(), open: 0 });
     },
   });
   transport.onclose = () => {
@@ -64,7 +71,9 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
 setInterval(() => {
   const deadline = Date.now() - SESSION_IDLE_MS;
   for (const [sessionId, session] of sessions) {
-    if (session.lastSeen < deadline) {
+    // A standalone SSE stream stays open without producing further requests, so
+    // idleness is measured only once nothing is in flight for that session.
+    if (session.open === 0 && session.lastSeen < deadline) {
       sessions.delete(sessionId);
       void session.transport.close();
       console.error(`Closed idle session ${sessionId}`);
@@ -120,6 +129,11 @@ createHttpServer((req, res) => {
           return;
         }
         session.lastSeen = Date.now();
+        session.open++;
+        res.on('close', () => {
+          session.open--;
+          session.lastSeen = Date.now();
+        });
         transport = session.transport;
       } else if (isInitializeRequest(body)) {
         transport = await openSession();
