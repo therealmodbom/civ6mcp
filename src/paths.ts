@@ -1,3 +1,4 @@
+import { existsSync } from 'fs';
 import { homedir, platform } from 'os';
 import { join } from 'path';
 
@@ -28,12 +29,22 @@ export function getLogsDirectory(): string {
 }
 
 /**
- * Get the UserOptions.txt path for the current platform (for documentation purposes).
+ * Get the UserOptions.txt path for the current platform (used in error messages).
+ *
+ * Civ VI has moved this file between updates, so several locations are in the wild.
+ * Return whichever exists; fall back to the first candidate when none do, so the
+ * message still names a plausible path.
  */
 export function getUserOptionsPath(): string {
-  if (platform() === 'win32') {
-    return join(getWindowsLocalAppDataDirectory(), 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt');
-  }
-  // macOS
-  return join(homedir(), 'Library', 'Application Support', "Sid Meier's Civilization VI", 'UserOptions.txt');
+  const appSupport = join(homedir(), 'Library', 'Application Support');
+  const candidates = platform() === 'win32'
+    ? [join(getWindowsLocalAppDataDirectory(), 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt')]
+    : [
+        // Current layout — same nesting the logs directory uses
+        join(appSupport, "Sid Meier's Civilization VI", 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
+        join(appSupport, 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
+        join(appSupport, "Sid Meier's Civilization VI", 'UserOptions.txt'),
+      ];
+
+  return candidates.find(existsSync) ?? candidates[0];
 }
