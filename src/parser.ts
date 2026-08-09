@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { unzipSync, constants } from 'zlib';
+import { createRequire } from 'module';
 import type { SaveFileInfo, GameState, CivInfo, ModInfo } from './types.js';
 import {
   getLatestTurnStatsFullCivsOnly,
@@ -16,6 +17,31 @@ const SAVE_PATH = getSavesDirectory();
 // Binary markers from the save file format
 const COMPRESSED_DATA_END = Buffer.from([0, 0, 0xFF, 0xFF]);
 const ZLIB_HEADER = Buffer.from([0x78, 0x9C]);
+
+// ACTOR_AI_HUMAN values used by the save format: 3 = human, 1 = AI
+const ACTOR_HUMAN = 3;
+
+const require = createRequire(import.meta.url);
+let saveParser: typeof import('civ6-save-parser') | null = null;
+
+/**
+ * civ6-save-parser guards its CLI block with `!module.parent`, which is true when
+ * a CJS package is loaded from ESM — so merely importing it prints a usage line to
+ * stdout. On a stdio MCP server that lands in the JSON-RPC stream and breaks every
+ * client, so stdout is muted for the duration of the load.
+ */
+function loadSaveParser(): typeof import('civ6-save-parser') {
+  if (!saveParser) {
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try {
+      saveParser = require('civ6-save-parser');
+    } finally {
+      process.stdout.write = write;
+    }
+  }
+  return saveParser!;
+}
 
 // Known binary markers for game data
 const MARKERS = {
@@ -143,6 +169,28 @@ function decompressGameData(buffer: Buffer): Buffer | null {
     return unzipSync(assembledData, { finishFlush: constants.Z_SYNC_FLUSH });
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the civs from the save's actor records. ACTOR_AI_HUMAN is the game's own
+ * human/AI flag (3 = human, 1 = AI), so this identifies the player directly
+ * instead of inferring it from city names.
+ */
+function extractCivsFromActors(buffer: Buffer): CivInfo[] {
+  try {
+    const civs = loadSaveParser().parse(buffer).parsed.CIVS ?? [];
+    return civs
+      .filter(c => c.ACTOR_TYPE?.data === 'CIVILIZATION_LEVEL_FULL_CIV' && c.ACTOR_NAME?.data)
+      .map(c => ({
+        // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
+        leader: formatLeaderName(c.LEADER_NAME!.data.replace(/^LEADER_/, '').replace(/_ALT$/, '')),
+        civilization: formatEnumValue(c.ACTOR_NAME!.data.replace(/^CIVILIZATION_/, '')),
+        type: 'full_civ' as const,
+        isHuman: c.ACTOR_AI_HUMAN?.data === ACTOR_HUMAN,
+      }));
+  } catch {
+    return [];
   }
 }
 
@@ -392,6 +440,14 @@ export function parseSaveFile(filePath: string): GameState {
   const { player: headerPlayer, aiCivs: headerAiCivs, cityStates: headerCityStates } = extractCivsFromHeader(headerSection);
   let allCivs = headerPlayer ? [headerPlayer, ...headerAiCivs] : [...headerAiCivs];
 
+  // Prefer the save's own actor records: they carry ACTOR_AI_HUMAN, the only
+  // reliable human/AI flag. The header text scan has none — "Players:" follows
+  // every CIVILIZATION_LEVEL_FULL_CIV marker, so its heuristic matches all civs.
+  const actorCivs = extractCivsFromActors(buffer);
+  if (actorCivs.length > 0) {
+    allCivs = actorCivs;
+  }
+
   // Extract mods
   const mods: ModInfo[] = [];
   const modMatches = headerSection.matchAll(/([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\s*\{"LOC_([A-Z_]+)_MOD_TITLE"/gi);
@@ -414,23 +470,14 @@ export function parseSaveFile(filePath: string): GameState {
     // Decompression failed, continue with header data
   }
 
-  // Identify player civ based on player cities
+  // Identify the player civ by its human flag
   let playerCiv: CivInfo | null = null;
   let otherCivs: CivInfo[] = [];
 
-  if (decompressedInfo?.playerCities && decompressedInfo.playerCities.length > 0) {
-    // Find which civ matches the player cities based on known city-civ mappings
-    const playerCivName = identifyCivFromCities(decompressedInfo.playerCities);
-    if (playerCivName) {
-      // Find this civ in our list
-      const matchIndex = allCivs.findIndex(c =>
-        c.civilization.toUpperCase() === playerCivName.toUpperCase());
-      if (matchIndex >= 0) {
-        playerCiv = allCivs[matchIndex];
-        playerCiv.isHuman = true;
-        otherCivs = allCivs.filter((_, i) => i !== matchIndex);
-      }
-    }
+  const humanIndex = allCivs.findIndex(c => c.isHuman);
+  if (humanIndex >= 0) {
+    playerCiv = allCivs[humanIndex];
+    otherCivs = allCivs.filter((_, i) => i !== humanIndex);
   }
 
   // Fallback: use first civ as player
@@ -469,28 +516,6 @@ export function parseSaveFile(filePath: string): GameState {
   };
 }
 
-// Map known cities to their civilization
-function identifyCivFromCities(cities: string[]): string | null {
-  const cityToCiv: Record<string, string> = {
-    'Hue': 'VIETNAM', 'Da Nang': 'VIETNAM', 'Hanoi': 'VIETNAM', 'Saigon': 'VIETNAM',
-    'Nha Trang': 'VIETNAM', 'Can Tho': 'VIETNAM', 'Hai Phong': 'VIETNAM', 'Vinh': 'VIETNAM',
-    'Thang Long': 'VIETNAM', 'Bien Hoa': 'VIETNAM',
-    'Tbilisi': 'GEORGIA', 'Kutaisi': 'GEORGIA', 'Batumi': 'GEORGIA',
-    'Persepolis': 'PERSIA', 'Pasargadae': 'PERSIA', 'Susa': 'PERSIA',
-    'Ottawa': 'CANADA', 'Toronto': 'CANADA', 'Montreal': 'CANADA',
-    'Amsterdam': 'NETHERLANDS', 'Rotterdam': 'NETHERLANDS', 'The Hague': 'NETHERLANDS',
-    'Istanbul': 'OTTOMAN', 'Ankara': 'OTTOMAN', 'Edirne': 'OTTOMAN',
-    'Rome': 'ROME', 'Antium': 'ROME', 'Cumae': 'ROME',
-    'Alexandria': 'EGYPT', 'Thebes': 'EGYPT', 'Memphis': 'EGYPT',
-  };
-
-  for (const city of cities) {
-    const civ = cityToCiv[city];
-    if (civ) return civ;
-  }
-  return null;
-}
-
 interface DecompressedInfo {
   technologies: string[];
   civics: string[];
@@ -524,11 +549,9 @@ function analyzeDecompressedData(data: Buffer): DecompressedInfo {
   const cityNames = [...new Set((text.match(/LOC_CITY_NAME_([A-Z_]+)/g) || []))]
     .map(c => formatEnumValue(c.replace('LOC_CITY_NAME_', '')));
 
-  // Try to identify player cities (Vietnam cities for Lady Trieu)
-  const vietnamCities = ['THANG_LONG', 'HUE', 'HANOI', 'SAIGON', 'DA_NANG', 'HAI_PHONG', 'NHA_TRANG', 'CAN_THO', 'BIEN_HOA', 'VINH'];
-  const playerCities = vietnamCities
-    .filter(c => text.includes(c))
-    .map(c => formatEnumValue(c));
+  // City ownership is not recoverable from this flat text scan — LOC_CITY_NAME_*
+  // entries carry no owner — so player cities stay empty rather than guessed.
+  const playerCities: string[] = [];
 
   // City-states active in the game
   const cityStates = [...new Set((text.match(/CIVILIZATION_([A-Z_]+)/g) || []))]
