@@ -40,6 +40,9 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
   return transport;
 }
 
+/** Distinct from `undefined` (no body), so a malformed body gets its own answer. */
+const MALFORMED = Symbol('malformed-json');
+
 async function readBody(req: import('node:http').IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -47,8 +50,14 @@ async function readBody(req: import('node:http').IncomingMessage): Promise<unkno
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    return undefined;
+    return MALFORMED;
   }
+}
+
+function jsonRpcError(res: import('node:http').ServerResponse, status: number, code: number, message: string) {
+  res.writeHead(status, { 'Content-Type': 'application/json' }).end(
+    JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null })
+  );
 }
 
 createHttpServer((req, res) => {
@@ -60,6 +69,11 @@ createHttpServer((req, res) => {
       }
 
       const body = req.method === 'POST' ? await readBody(req) : undefined;
+      if (body === MALFORMED) {
+        jsonRpcError(res, 400, -32700, 'Parse error: request body is not valid JSON');
+        return;
+      }
+
       const sessionId = req.headers['mcp-session-id'];
       const existing = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined;
 
@@ -67,13 +81,7 @@ createHttpServer((req, res) => {
       // cannot be served — the SDK answers those with the proper JSON-RPC error.
       const transport = existing ?? (isInitializeRequest(body) ? await openSession() : undefined);
       if (!transport) {
-        res.writeHead(400, { 'Content-Type': 'application/json' }).end(
-          JSON.stringify({
-            jsonrpc: '2.0',
-            error: { code: -32000, message: 'Bad Request: no valid session id' },
-            id: null,
-          })
-        );
+        jsonRpcError(res, 400, -32000, 'Bad Request: no valid session id');
         return;
       }
 
