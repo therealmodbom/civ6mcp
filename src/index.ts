@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -53,7 +55,7 @@ import {
 // In-memory storage for game context notes
 const gameContext: Map<string, string> = new Map();
 
-const server = new Server(
+export const server = new Server(
   {
     name: 'civ6mcp',
     version: '1.0.0',
@@ -884,14 +886,19 @@ Once you've played a turn, try this command again.`,
   }
 });
 
-// Start the server
+// Start the server on stdio — only when run directly, so http.ts can import `server`
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('Civ6 MCP Server running on stdio');
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// realpathSync, because Node resolves module URLs through symlinks but argv[1] not
+const entryUrl = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
+
+if (entryUrl === import.meta.url) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
