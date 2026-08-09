@@ -91,10 +91,14 @@ npm run start:http
 |----------|---------|---------|
 | `PORT` | `8000` | Port to listen on |
 | `MCP_ALLOWED_HOSTS` | — | Extra `Host` header values to accept, comma-separated (for example `civ6.tail1234.ts.net`) |
-| `MCP_ALLOWED_ORIGINS` | — | `Origin` values to accept from browser clients, comma-separated. Unset means the `Origin` header is not checked |
-| `MCP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without activity. Minimum `1000` |
+| `MCP_ALLOWED_ORIGINS` | — | `Origin` values to accept, comma-separated. Unset means the `Origin` header is not checked |
+| `MCP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without activity. Minimum `1000`. Also the idle delay before a silent connection is probed |
 
 The server binds `127.0.0.1` only and has no authentication of its own. Put a proxy in front of it — `tailscale serve` for instance — and name that proxy's hostname in `MCP_ALLOWED_HOSTS`. Do not expose the port itself.
+
+`MCP_ALLOWED_ORIGINS` is not a way to let a web page talk to the server. No CORS headers are sent and a preflight `OPTIONS /mcp` is rejected, so a browser blocks the call whatever the variable says. It only narrows which non-browser clients may send an `Origin` header, which is why leaving it unset is the sensible default. Serving a browser client would mean CORS on a loopback endpoint that has no authentication of its own, and that is the proxy's job, not this server's.
+
+A client that disappears without closing its connection — a laptop that sleeps, a network that drops — keeps its session alive until the connection is probed and found dead, so a session can outlive `MCP_SESSION_IDLE_MS` by the operating system's keepalive budget (ten minutes on macOS defaults). Sessions are held in memory only; restarting the server clears them.
 
 ## Claude Project Setup (Recommended)
 

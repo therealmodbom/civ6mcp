@@ -3,7 +3,9 @@
 // own — put a proxy in front of it (for example `tailscale serve`) rather than
 // changing HOST, and name that proxy's hostname in MCP_ALLOWED_HOSTS.
 //
-// Env: PORT (default 8000), MCP_ALLOWED_HOSTS (comma-separated, adds to the defaults).
+// Env: PORT (default 8000), MCP_ALLOWED_HOSTS (comma-separated, adds to the defaults),
+// MCP_ALLOWED_ORIGINS (comma-separated; unset leaves the Origin check off),
+// MCP_SESSION_IDLE_MS (default 30 min; doubles as the TCP keepalive idle delay).
 import { randomUUID } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -49,7 +51,10 @@ const allowedOrigins = (process.env.MCP_ALLOWED_ORIGINS ?? '')
 interface Session {
   transport: StreamableHTTPServerTransport;
   lastSeen: number;
-  /** Requests still in flight, including a standalone SSE stream held open */
+  /**
+   * Requests still in flight, including a standalone SSE stream held open. TCP
+   * keepalive bounds how long a peer that has vanished can hold this above zero.
+   */
   open: number;
 }
 
@@ -108,7 +113,16 @@ function jsonRpcError(res: import('node:http').ServerResponse, status: number, c
   );
 }
 
-createHttpServer((req, res) => {
+// TCP keepalive is what bounds the in-flight guard. Without it a peer that vanishes
+// without FIN holds its request open for the process lifetime: server.timeout is 0 and
+// requestTimeout stops applying once the request has been received, so nothing else
+// notices. Probes start after SESSION_IDLE_MS of socket silence and the peer's failure
+// to answer them closes the socket, which releases the guard and lets the sweep reclaim
+// the session. Preferred over an absolute session-age cap or treating a held stream as
+// idle: those bound the leak by disconnecting healthy long-lived clients too, whereas
+// keepalive separates a dead peer from a quiet one. The cost is that the detection
+// deadline is the OS probe budget (macOS: 75s x 8), not a number this file sets.
+createHttpServer({ keepAlive: true, keepAliveInitialDelay: SESSION_IDLE_MS }, (req, res) => {
   void (async () => {
     try {
       if (new URL(req.url ?? '/', `http://${HOST}`).pathname !== PATH) {
