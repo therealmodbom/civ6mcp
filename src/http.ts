@@ -14,6 +14,11 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 8000);
 const PATH = '/mcp';
 
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`Invalid PORT: ${JSON.stringify(process.env.PORT)}`);
+  process.exit(1);
+}
+
 // A client that crashes or loses the network never sends DELETE, and the SDK only
 // closes a transport from its delete handler — so without an idle sweep every lost
 // client leaks a Server plus transport for the lifetime of the process.
@@ -25,6 +30,10 @@ const allowedHosts = [
   `localhost:${PORT}`,
   ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean),
 ];
+
+// The SDK only checks Origin when allowedOrigins is set, and skips the check when a
+// request carries none — so this constrains browsers without affecting other clients.
+const allowedOrigins = allowedHosts.flatMap((host) => [`http://${host}`, `https://${host}`]);
 
 interface Session {
   transport: StreamableHTTPServerTransport;
@@ -40,6 +49,7 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
     sessionIdGenerator: () => randomUUID(),
     enableDnsRebindingProtection: true,
     allowedHosts,
+    allowedOrigins,
     onsessioninitialized: (sessionId) => {
       sessions.set(sessionId, { transport, lastSeen: Date.now() });
     },
