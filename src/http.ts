@@ -5,9 +5,10 @@
 //
 // Env: PORT (default 8000), MCP_ALLOWED_HOSTS (comma-separated, adds to the defaults).
 import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer as createHttpServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { server } from './index.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { createServer } from './index.js';
 
 const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 8000);
@@ -19,25 +20,69 @@ const allowedHosts = [
   ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').filter(Boolean),
 ];
 
-// One shared session: this reuses the module-level `server`, which can only be
-// connected to a single transport. That serves one client at a time — a second
-// client's initialize is rejected while the first session is open.
-const transport = new StreamableHTTPServerTransport({
-  sessionIdGenerator: () => randomUUID(),
-  enableDnsRebindingProtection: true,
-  allowedHosts,
-});
-await server.connect(transport);
+// One MCP Server and transport per session — the SDK binds a Server to a single
+// transport, so sharing one would serve a single client at a time.
+const sessions = new Map<string, StreamableHTTPServerTransport>();
 
-createServer((req, res) => {
-  if (new URL(req.url ?? '/', `http://${HOST}`).pathname !== PATH) {
-    res.writeHead(404).end();
-    return;
-  }
-  transport.handleRequest(req, res).catch((error) => {
-    console.error('Request failed:', error);
-    if (!res.headersSent) res.writeHead(500).end();
+async function openSession(): Promise<StreamableHTTPServerTransport> {
+  const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    enableDnsRebindingProtection: true,
+    allowedHosts,
+    onsessioninitialized: (sessionId) => {
+      sessions.set(sessionId, transport);
+    },
   });
+  transport.onclose = () => {
+    if (transport.sessionId) sessions.delete(transport.sessionId);
+  };
+  await createServer().connect(transport);
+  return transport;
+}
+
+async function readBody(req: import('node:http').IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  if (chunks.length === 0) return undefined;
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+createHttpServer((req, res) => {
+  void (async () => {
+    try {
+      if (new URL(req.url ?? '/', `http://${HOST}`).pathname !== PATH) {
+        res.writeHead(404).end();
+        return;
+      }
+
+      const body = req.method === 'POST' ? await readBody(req) : undefined;
+      const sessionId = req.headers['mcp-session-id'];
+      const existing = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined;
+
+      // A session id we do not know, or a first request that is not an initialize,
+      // cannot be served — the SDK answers those with the proper JSON-RPC error.
+      const transport = existing ?? (isInitializeRequest(body) ? await openSession() : undefined);
+      if (!transport) {
+        res.writeHead(400, { 'Content-Type': 'application/json' }).end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32000, message: 'Bad Request: no valid session id' },
+            id: null,
+          })
+        );
+        return;
+      }
+
+      await transport.handleRequest(req, res, body);
+    } catch (error) {
+      console.error('Request failed:', error);
+      if (!res.headersSent) res.writeHead(500).end();
+    }
+  })();
 }).listen(PORT, HOST, () => {
   console.error(`Civ6 MCP Server running on http://${HOST}:${PORT}${PATH}`);
 });

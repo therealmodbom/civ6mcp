@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
@@ -55,17 +56,30 @@ import {
 // In-memory storage for game context notes
 const gameContext: Map<string, string> = new Map();
 
-export const server = new Server(
-  {
-    name: 'civ6mcp',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
+/**
+ * A fresh Server per caller. The MCP SDK binds one Server to one transport, so a
+ * shared instance would serve a single client at a time — the second client's
+ * initialize is rejected while the first session is open. Handlers are stateless;
+ * the only shared state is `gameContext` above, which is deliberately global so
+ * notes set by one client are visible to the next.
+ */
+export function createServer(): Server {
+  const server = new Server(
+    {
+      name: 'civ6mcp',
+      version: '1.0.0',
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, listTools);
+  server.setRequestHandler(CallToolRequestSchema, callTool);
+  return server;
+}
 
 // Define tool schemas
 const ListSavesSchema = z.object({
@@ -136,7 +150,7 @@ const GetTrendAnalysisSchema = z.object({
 });
 
 // List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+const listTools = async () => {
   return {
     tools: [
       {
@@ -374,10 +388,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     ],
   };
-});
+};
 
 // Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callTool = async (request: CallToolRequest) => {
   const { name, arguments: args } = request.params;
 
   try {
@@ -884,12 +898,12 @@ Once you've played a turn, try this command again.`,
       isError: true,
     };
   }
-});
+};
 
-// Start the server on stdio — only when run directly, so http.ts can import `server`
+// Start the server on stdio — only when run directly, so http.ts can import the factory
 async function main() {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await createServer().connect(transport);
   console.error('Civ6 MCP Server running on stdio');
 }
 
