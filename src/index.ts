@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import {
   CallToolRequestSchema,
@@ -893,8 +893,17 @@ async function main() {
   console.error('Civ6 MCP Server running on stdio');
 }
 
-// realpathSync, because Node resolves module URLs through symlinks but argv[1] not
-const entryUrl = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
+// Node leaves argv[1] as typed, so resolve it the way an import would — through a
+// directory's package main (`node .`), a missing extension (`node dist/index`) and
+// symlinks — before comparing it with this module's URL.
+let entryUrl = '';
+try {
+  if (process.argv[1]) {
+    entryUrl = pathToFileURL(createRequire(import.meta.url).resolve(process.argv[1])).href;
+  }
+} catch {
+  // argv[1] does not resolve to a module — then it is not this one
+}
 
 if (entryUrl === import.meta.url) {
   main().catch((error) => {

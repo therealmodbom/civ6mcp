@@ -78,6 +78,22 @@ Add this to your Claude Desktop configuration file:
 
 Replace `/path/to/civ6mcp` with the actual path to where you cloned the repository.
 
+## HTTP Transport (Optional)
+
+Claude Desktop spawns the server itself over stdio, so it has to run on the same machine as the game. For a client that cannot do that, `npm run start:http` serves the same tools over Streamable HTTP at `/mcp`.
+
+```bash
+npm run build
+npm run start:http
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `8000` | Port to listen on |
+| `MCP_ALLOWED_HOSTS` | — | Extra `Host` header values to accept, comma-separated (for example `civ6.tail1234.ts.net`) |
+
+The server binds `127.0.0.1` only and has no authentication of its own. Put a proxy in front of it — `tailscale serve` for instance — and name that proxy's hostname in `MCP_ALLOWED_HOSTS`. Do not expose the port itself.
+
 ## Claude Project Setup (Recommended)
 
 For the best experience, create a Claude Project with the strategic advisor instructions:

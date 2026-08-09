@@ -13,11 +13,20 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 8000);
 const PATH = '/mcp';
 
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`Invalid PORT: ${JSON.stringify(process.env.PORT)}`);
+  process.exit(1);
+}
+
 const allowedHosts = [
   `127.0.0.1:${PORT}`,
   `localhost:${PORT}`,
-  ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').filter(Boolean),
+  ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').map((host) => host.trim()).filter(Boolean),
 ];
+
+// The SDK only checks Origin when allowedOrigins is set, and skips the check when a
+// request carries none — so this constrains browsers without affecting other clients.
+const allowedOrigins = allowedHosts.flatMap((host) => [`http://${host}`, `https://${host}`]);
 
 // One shared session: this reuses the module-level `server`, which can only be
 // connected to a single transport. That serves one client at a time — a second
@@ -26,6 +35,7 @@ const transport = new StreamableHTTPServerTransport({
   sessionIdGenerator: () => randomUUID(),
   enableDnsRebindingProtection: true,
   allowedHosts,
+  allowedOrigins,
 });
 await server.connect(transport);
 
