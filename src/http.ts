@@ -14,15 +14,26 @@ const HOST = '127.0.0.1';
 const PORT = Number(process.env.PORT ?? 8000);
 const PATH = '/mcp';
 
+// A client that crashes or loses the network never sends DELETE, and the SDK only
+// closes a transport from its delete handler — so without an idle sweep every lost
+// client leaks a Server plus transport for the lifetime of the process.
+const SESSION_IDLE_MS = Number(process.env.MCP_SESSION_IDLE_MS ?? 30 * 60_000);
+const SWEEP_INTERVAL_MS = Math.min(60_000, Math.max(1_000, SESSION_IDLE_MS / 2));
+
 const allowedHosts = [
   `127.0.0.1:${PORT}`,
   `localhost:${PORT}`,
-  ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').filter(Boolean),
+  ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean),
 ];
+
+interface Session {
+  transport: StreamableHTTPServerTransport;
+  lastSeen: number;
+}
 
 // One MCP Server and transport per session — the SDK binds a Server to a single
 // transport, so sharing one would serve a single client at a time.
-const sessions = new Map<string, StreamableHTTPServerTransport>();
+const sessions = new Map<string, Session>();
 
 async function openSession(): Promise<StreamableHTTPServerTransport> {
   const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
@@ -30,7 +41,7 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
     enableDnsRebindingProtection: true,
     allowedHosts,
     onsessioninitialized: (sessionId) => {
-      sessions.set(sessionId, transport);
+      sessions.set(sessionId, { transport, lastSeen: Date.now() });
     },
   });
   transport.onclose = () => {
@@ -39,6 +50,18 @@ async function openSession(): Promise<StreamableHTTPServerTransport> {
   await createServer().connect(transport);
   return transport;
 }
+
+setInterval(() => {
+  const deadline = Date.now() - SESSION_IDLE_MS;
+  for (const [sessionId, session] of sessions) {
+    if (session.lastSeen < deadline) {
+      sessions.delete(sessionId);
+      void session.transport.close();
+      console.error(`Closed idle session ${sessionId}`);
+    }
+  }
+  // Do not keep the process alive just to sweep
+}, SWEEP_INTERVAL_MS).unref();
 
 /** Distinct from `undefined` (no body), so a malformed body gets its own answer. */
 const MALFORMED = Symbol('malformed-json');
@@ -74,14 +97,24 @@ createHttpServer((req, res) => {
         return;
       }
 
-      const sessionId = req.headers['mcp-session-id'];
-      const existing = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined;
+      const headerId = req.headers['mcp-session-id'];
+      const sessionId = typeof headerId === 'string' ? headerId : undefined;
+      let transport: StreamableHTTPServerTransport;
 
-      // A session id we do not know, or a first request that is not an initialize,
-      // cannot be served — the SDK answers those with the proper JSON-RPC error.
-      const transport = existing ?? (isInitializeRequest(body) ? await openSession() : undefined);
-      if (!transport) {
-        jsonRpcError(res, 400, -32000, 'Bad Request: no valid session id');
+      if (sessionId) {
+        const session = sessions.get(sessionId);
+        // Answer an unknown id as such — including on an initialize, which must not
+        // silently mint a second session behind a client that thinks it has one.
+        if (!session) {
+          jsonRpcError(res, 404, -32001, 'Session not found: re-initialize to obtain a new session id');
+          return;
+        }
+        session.lastSeen = Date.now();
+        transport = session.transport;
+      } else if (isInitializeRequest(body)) {
+        transport = await openSession();
+      } else {
+        jsonRpcError(res, 400, -32000, 'Bad Request: no session id, and this is not an initialize request');
         return;
       }
 
