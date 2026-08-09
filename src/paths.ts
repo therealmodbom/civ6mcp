@@ -38,7 +38,11 @@ export function getLogsDirectory(): string {
 export function getUserOptionsPath(): string {
   const appSupport = join(homedir(), 'Library', 'Application Support');
   const candidates = platform() === 'win32'
-    ? [join(getWindowsLocalAppDataDirectory(), 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt')]
+    ? [
+        join(getWindowsLocalAppDataDirectory(), 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
+        // Older layout — still the saves root, see getSavesDirectory()
+        join(homedir(), 'Documents', 'My Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
+      ]
     : [
         // Current layout — same nesting the logs directory uses
         join(appSupport, "Sid Meier's Civilization VI", 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
