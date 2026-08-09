@@ -91,6 +91,8 @@ npm run start:http
 |----------|---------|---------|
 | `PORT` | `8000` | Port to listen on |
 | `MCP_ALLOWED_HOSTS` | — | Extra `Host` header values to accept, comma-separated (for example `civ6.tail1234.ts.net`) |
+| `MCP_ALLOWED_ORIGINS` | — | `Origin` values to accept from browser clients, comma-separated. Unset means the `Origin` header is not checked |
+| `MCP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without activity. Minimum `1000` |
 
 The server binds `127.0.0.1` only and has no authentication of its own. Put a proxy in front of it — `tailscale serve` for instance — and name that proxy's hostname in `MCP_ALLOWED_HOSTS`. Do not expose the port itself.
 

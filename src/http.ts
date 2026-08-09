@@ -36,9 +36,15 @@ const allowedHosts = [
   ...(process.env.MCP_ALLOWED_HOSTS ?? '').split(',').map(h => h.trim()).filter(Boolean),
 ];
 
-// The SDK only checks Origin when allowedOrigins is set, and skips the check when a
-// request carries none — so this constrains browsers without affecting other clients.
-const allowedOrigins = allowedHosts.flatMap((host) => [`http://${host}`, `https://${host}`]);
+// Origins are the calling *pages*, not this server's own addresses — deriving them
+// from allowedHosts rejected every real browser client (an MCP Inspector on
+// localhost:6274 got the same 403 as an attacker) while allowing none. Opt-in via
+// MCP_ALLOWED_ORIGINS; unset means the SDK skips the Origin check, which is the
+// honest default for a loopback server that sends no CORS headers anyway.
+const allowedOrigins = (process.env.MCP_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 interface Session {
   transport: StreamableHTTPServerTransport;
