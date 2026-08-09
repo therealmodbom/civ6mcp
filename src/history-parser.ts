@@ -293,16 +293,25 @@ export function parseGameHistory(): GameHistory | null {
     civSet.add(stat.civilization);
   }
 
+  // Player_Stats.csv identifies a row by civilization, Game_PlayerScores.csv by
+  // player id, so the two are joined through the save's slot order. Only major
+  // civs get an id from it, which is what the rankings need; city-states score 0.
+  const playerIds = new Map(
+    getCurrentGameActors()
+      .filter(a => a.playerId !== undefined)
+      .map(a => [a.civilization, a.playerId!] as const)
+  );
+
   // Convert to TurnData
   for (const [turn, stats] of turnMap) {
     const turnScores = scoresByTurn.get(turn);
 
     const turnData: TurnData = {
       turn,
-      civStats: stats.map((s, index) => {
+      civStats: stats.map(s => {
         const displayInfo = getCivDisplayInfo(s.civilization);
-        // Match scores by index - civs appear in same order in both files
-        const score = turnScores?.get(index) ?? 0;
+        const playerId = playerIds.get(s.civilization);
+        const score = playerId === undefined ? 0 : turnScores?.get(playerId) ?? 0;
         return {
           civilization: displayInfo.civ,
           leader: displayInfo.leader,
@@ -349,10 +358,21 @@ export function getLatestTurnStats(): CivStatistics[] | null {
 }
 
 /**
+ * How far from the table's own turn a merged human row may be. The gap this exists
+ * for is one turn; two allows for a log written across a turn boundary. Beyond that
+ * the row is stale — the player is eliminated, or the log stopped covering them —
+ * and a years-old row does not belong in a current ranking.
+ */
+const MAX_HUMAN_ROW_TURN_GAP = 2;
+
+/**
  * Civ 6 writes the human's row at a different point in the turn cycle than the AI
  * rows, so the newest complete turn can be missing the player entirely — in a Rome
  * game turn 219 lists every AI while Rome first appears under turn 220. Pull the
  * player's most recent row in when that happens, so rankings include them.
+ *
+ * The merged row keeps its own `turn`, which is how callers can tell the table
+ * spans two turns; see turnMixNote.
  */
 function withHumanRow(history: GameHistory, stats: CivStatistics[]): CivStatistics[] {
   const human = getCurrentGameActors().find(a => a.isHuman);
@@ -360,11 +380,32 @@ function withHumanRow(history: GameHistory, stats: CivStatistics[]): CivStatisti
     return stats;
   }
 
+  const baseTurn = stats[0]?.turn ?? history.turns[history.turns.length - 1]?.turn;
+  if (baseTurn === undefined) return stats;
+
   for (let i = history.turns.length - 1; i >= 0; i--) {
-    const row = history.turns[i].civStats.find(s => s.rawCivName === human.civilization);
+    const { turn, civStats } = history.turns[i];
+    if (turn < baseTurn - MAX_HUMAN_ROW_TURN_GAP) break;
+    if (turn > baseTurn + MAX_HUMAN_ROW_TURN_GAP) continue;
+
+    const row = civStats.find(s => s.rawCivName === human.civilization);
     if (row) return [...stats, row];
   }
   return stats;
+}
+
+/**
+ * A stats table can legitimately mix turns, because withHumanRow merges the human's
+ * row from the turn Civ 6 happened to log it under. Callers label the table with a
+ * single turn, so they have to say which rows are not from it.
+ */
+function turnMixNote(rows: { civilization: string; turn: number }[]): string | null {
+  const baseTurn = Math.min(...rows.map(r => r.turn));
+  const offTurn = rows.filter(r => r.turn !== baseTurn);
+  if (offTurn.length === 0) return null;
+
+  const named = offTurn.map(r => `${r.civilization} (turn ${r.turn})`).join(', ');
+  return `Note: ${named} — Civ 6 logs the human's row later in the turn cycle, so those values are newer than the rest of the table.`;
 }
 
 export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
@@ -434,6 +475,7 @@ export function calculateVictoryProgress(stats: CivStatistics[]): VictoryProgres
     return {
       civilization: stat.civilization,
       leader: stat.leader,
+      turn: stat.turn,
       science: {
         position: sciencePos,
         techsResearched: stat.techsResearched,
@@ -476,7 +518,9 @@ export function formatStatsComparison(stats: CivStatistics[]): string {
 
   const lines: string[] = [];
   lines.push('# Civilization Statistics Comparison');
-  lines.push(`Turn: ${majorCivs[0]?.turn || 'N/A'}`);
+  lines.push(`Turn: ${majorCivs.length > 0 ? Math.min(...majorCivs.map(s => s.turn)) : 'N/A'}`);
+  const note = turnMixNote(majorCivs);
+  if (note) lines.push(note);
   lines.push('');
 
   // Sort by score (descending)
@@ -511,6 +555,8 @@ export function formatVictoryProgress(progress: VictoryProgress[]): string {
 
   const lines: string[] = [];
   lines.push('# Victory Progress');
+  const note = turnMixNote(progress);
+  if (note) lines.push(note);
   lines.push('');
 
   // Science Victory

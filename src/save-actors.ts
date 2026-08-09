@@ -49,6 +49,12 @@ export interface SaveActor {
   isHuman: boolean;
   /** True only for CIVILIZATION_LEVEL_FULL_CIV — city-states, free cities and barbarians are not */
   isFullCiv: boolean;
+  /**
+   * Player id, the same id Game_PlayerScores.csv writes in its Player column. A
+   * civ's position in the save's CIVS list is that id, so only the major civs
+   * listed there have one: the city-states in ACTORS are in no particular order.
+   */
+  playerId?: number;
 }
 
 const require = createRequire(import.meta.url);
@@ -93,17 +99,23 @@ export function readActors(buffer: Buffer): SaveActor[] {
 
   try {
     const parsed = loadSaveParser().parse(buffer).parsed;
-    const actors = [...(parsed.CIVS ?? []), ...(parsed.ACTORS ?? [])]
-      .filter(c =>
+    // The index into CIVS is the player id; ACTORS entries carry no id at all.
+    const slots: Array<[(typeof parsed.CIVS)[number], number | undefined]> = [
+      ...(parsed.CIVS ?? []).map((c, i): [typeof c, number] => [c, i]),
+      ...(parsed.ACTORS ?? []).map((c): [typeof c, undefined] => [c, undefined]),
+    ];
+    const actors = slots
+      .filter(([c]) =>
         c.ACTOR_NAME?.data &&
         c.ACTOR_TYPE?.data?.startsWith('CIVILIZATION_LEVEL_') &&
         c.ACTOR_AI_HUMAN?.data !== ACTOR_SLOT_INACTIVE
       )
-      .map(c => ({
+      .map(([c, playerId]) => ({
         civilization: c.ACTOR_NAME!.data.replace(/^CIVILIZATION_/, ''),
         leader: (c.LEADER_NAME?.data ?? '').replace(/^LEADER_/, ''),
         isHuman: c.ACTOR_AI_HUMAN?.data === ACTOR_HUMAN,
         isFullCiv: c.ACTOR_TYPE!.data === 'CIVILIZATION_LEVEL_FULL_CIV',
+        playerId,
       }));
 
     // A civilization can appear in both collections; CIVS is listed first and wins

@@ -106,6 +106,8 @@ export interface ScoreBreakdown {
 export interface VictoryProgress {
   civilization: string;
   leader: string;
+  /** Turn the underlying stats row was logged under; rows in one ranking can differ */
+  turn: number;
   science: {
     position: number;
     techsResearched: number;
