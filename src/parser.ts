@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { unzipSync, constants } from 'zlib';
 import type { SaveFileInfo, GameState, CivInfo, ModInfo } from './types.js';
-import { readActors } from './save-actors.js';
+import { readActors, isKnownCityStateName } from './save-actors.js';
 import {
   getLatestTurnStatsFullCivsOnly,
   calculateVictoryProgress,
@@ -574,16 +574,7 @@ function cleanWonderName(building: string): string {
 }
 
 function isCityState(civ: string): boolean {
-  const cityStates = [
-    'HATTUSA', 'KABUL', 'SINGAPORE', 'NGAZARGAMU', 'HUNZA', 'LA_VENTA', 'AKKAD',
-    'TARUGA', 'BRUSSELS', 'GENEVA', 'BABYLON', 'MUSCAT', 'VALLETTA', 'BUENOS_AIRES',
-    'ANTANANARIVO', 'ZANZIBAR', 'KUMASI', 'VILNIUS', 'BOLOGNA', 'FEZ', 'JERUSALEM',
-    'KANDY', 'YEREVAN', 'VATICAN_CITY', 'AUCKLAND', 'GRANADA', 'CAHOKIA',
-    'MITLA', 'JOHANNESBURG', 'NAZCA', 'AYUTTHAYA', 'CAGUANA', 'CHINGUETTI',
-    'HONG_KONG', 'MOHENJO_DARO', 'NAN_MADOL', 'PRESLAV', 'RAPA_NUI', 'TORONTO',
-    'WOLIN', 'ARMAGH', 'LAHORE', 'SAMARKAND', 'MOGADISHU', 'NALANDA',
-  ];
-  return cityStates.some(cs => civ.includes(cs));
+  return isKnownCityStateName(civ);
 }
 
 function formatEnumValue(value: string): string {

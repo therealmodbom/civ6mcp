@@ -17,6 +17,27 @@ import { getSavesDirectory } from './paths.js';
 const ACTOR_HUMAN = 3;
 const ACTOR_SLOT_INACTIVE = 2;
 
+/**
+ * Fallback classification for when no save is readable. The actor records are the
+ * real source — this list only keeps rankings roughly sane in the meantime, and it
+ * cannot be complete: every expansion adds city-states.
+ */
+const KNOWN_CITY_STATES = new Set([
+  'AKKAD', 'ANTANANARIVO', 'ANTIOCH', 'ARMAGH', 'AUCKLAND', 'AYUTTHAYA', 'BABYLON',
+  'BANDAR_BRUNEI', 'BOLOGNA', 'BRUSSELS', 'BUENOS_AIRES', 'CAGUANA', 'CAHOKIA',
+  'CARDIFF', 'CHINGUETTI', 'FEZ', 'GENEVA', 'GRANADA', 'HATTUSA', 'HONG_KONG',
+  'HUNZA', 'JAKARTA', 'JERUSALEM', 'JOHANNESBURG', 'KABUL', 'KANDY', 'KUMASI',
+  'LA_VENTA', 'LAHORE', 'LISBON', 'MEXICO_CITY', 'MITLA', 'MOGADISHU',
+  'MOHENJO_DARO', 'MUSCAT', 'NALANDA', 'NAN_MADOL', 'NAZCA', 'NGAZARGAMU',
+  'PALENQUE', 'PRESLAV', 'RAPA_NUI', 'SAMARKAND', 'SINGAPORE', 'TARUGA', 'TORONTO',
+  'VALLETTA', 'VATICAN_CITY', 'VILNIUS', 'WOLIN', 'YEREVAN', 'ZANZIBAR',
+]);
+
+/** Name-based fallback; prefer an actor's `isFullCiv` whenever a save is available. */
+export function isKnownCityStateName(civName: string): boolean {
+  return KNOWN_CITY_STATES.has(civName) || civName === 'FREE_CITIES';
+}
+
 export interface SaveActor {
   /** Civilization name without the CIVILIZATION_ prefix, e.g. ROME */
   civilization: string;

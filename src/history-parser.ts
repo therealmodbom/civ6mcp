@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { CivStatistics, VictoryProgress, GameHistory, TurnData, CivTrend } from './types.js';
 import { getLogsDirectory } from './paths.js';
-import { getCurrentGameActors } from './save-actors.js';
+import { getCurrentGameActors, isKnownCityStateName } from './save-actors.js';
 
 // Re-export for backwards compatibility
 export { getLogsDirectory } from './paths.js';
@@ -257,14 +257,7 @@ function isCityState(civName: string): boolean {
     return !actor.isFullCiv;
   }
 
-  const cityStates = [
-    'TARUGA', 'AKKAD', 'NGAZARGAMU', 'BRUSSELS', 'BABYLON', 'LA_VENTA', 'HUNZA',
-    'HATTUSA', 'KABUL', 'SINGAPORE', 'GRANADA', 'CAHOKIA', 'ZANZIBAR', 'MITLA',
-    'JOHANNESBURG', 'MUSCAT', 'GENEVA', 'VALLETTA', 'BUENOS_AIRES', 'ANTANANARIVO',
-    'KUMASI', 'VILNIUS', 'BOLOGNA', 'FEZ', 'JERUSALEM', 'KANDY', 'YEREVAN',
-    'VATICAN_CITY', 'AUCKLAND', 'NAZCA', 'SAMARKAND', 'ANTIOCH', 'BANDAR_BRUNEI',
-  ];
-  return cityStates.includes(civName) || civName === 'FREE_CITIES';
+  return isKnownCityStateName(civName);
 }
 
 export function parseGameHistory(): GameHistory | null {
