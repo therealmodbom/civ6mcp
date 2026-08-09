@@ -1,8 +1,8 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { unzipSync, constants } from 'zlib';
-import { createRequire } from 'module';
 import type { SaveFileInfo, GameState, CivInfo, ModInfo } from './types.js';
+import { readActors } from './save-actors.js';
 import {
   getLatestTurnStatsFullCivsOnly,
   calculateVictoryProgress,
@@ -17,31 +17,6 @@ const SAVE_PATH = getSavesDirectory();
 // Binary markers from the save file format
 const COMPRESSED_DATA_END = Buffer.from([0, 0, 0xFF, 0xFF]);
 const ZLIB_HEADER = Buffer.from([0x78, 0x9C]);
-
-// ACTOR_AI_HUMAN values used by the save format: 3 = human, 1 = AI
-const ACTOR_HUMAN = 3;
-
-const require = createRequire(import.meta.url);
-let saveParser: typeof import('civ6-save-parser') | null = null;
-
-/**
- * civ6-save-parser guards its CLI block with `!module.parent`, which is true when
- * a CJS package is loaded from ESM — so merely importing it prints a usage line to
- * stdout. On a stdio MCP server that lands in the JSON-RPC stream and breaks every
- * client, so stdout is muted for the duration of the load.
- */
-function loadSaveParser(): typeof import('civ6-save-parser') {
-  if (!saveParser) {
-    const write = process.stdout.write.bind(process.stdout);
-    process.stdout.write = () => true;
-    try {
-      saveParser = require('civ6-save-parser');
-    } finally {
-      process.stdout.write = write;
-    }
-  }
-  return saveParser!;
-}
 
 // Known binary markers for game data
 const MARKERS = {
@@ -178,20 +153,15 @@ function decompressGameData(buffer: Buffer): Buffer | null {
  * instead of inferring it from city names.
  */
 function extractCivsFromActors(buffer: Buffer): CivInfo[] {
-  try {
-    const civs = loadSaveParser().parse(buffer).parsed.CIVS ?? [];
-    return civs
-      .filter(c => c.ACTOR_TYPE?.data === 'CIVILIZATION_LEVEL_FULL_CIV' && c.ACTOR_NAME?.data)
-      .map(c => ({
-        // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
-        leader: formatLeaderName(c.LEADER_NAME!.data.replace(/^LEADER_/, '').replace(/_ALT$/, '')),
-        civilization: formatEnumValue(c.ACTOR_NAME!.data.replace(/^CIVILIZATION_/, '')),
-        type: 'full_civ' as const,
-        isHuman: c.ACTOR_AI_HUMAN?.data === ACTOR_HUMAN,
-      }));
-  } catch {
-    return [];
-  }
+  return readActors(buffer)
+    .filter(a => a.isFullCiv)
+    .map(a => ({
+      // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
+      leader: formatLeaderName(a.leader.replace(/_ALT$/, '')),
+      civilization: formatEnumValue(a.civilization),
+      type: 'full_civ' as const,
+      isHuman: a.isHuman,
+    }));
 }
 
 function extractCivsFromHeader(headerText: string): { player: CivInfo | null; aiCivs: CivInfo[]; cityStates: string[] } {

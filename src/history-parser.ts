@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { CivStatistics, VictoryProgress, GameHistory, TurnData, CivTrend } from './types.js';
 import { getLogsDirectory } from './paths.js';
+import { getCurrentGameActors } from './save-actors.js';
 
 // Re-export for backwards compatibility
 export { getLogsDirectory } from './paths.js';
@@ -245,7 +246,17 @@ function getCivDisplayInfo(rawName: string): { civ: string; leader: string } {
   return { civ: formatted, leader: formatted };
 }
 
+/**
+ * The CSV logs list city-states as ordinary CIVILIZATION_* rows, with nothing to
+ * tell them apart from major civs. The current save does carry that distinction,
+ * so ask it first; the name list below only covers a save being unreadable.
+ */
 function isCityState(civName: string): boolean {
+  const actor = getCurrentGameActors().find(a => a.civilization === civName);
+  if (actor) {
+    return !actor.isFullCiv;
+  }
+
   const cityStates = [
     'TARUGA', 'AKKAD', 'NGAZARGAMU', 'BRUSSELS', 'BABYLON', 'LA_VENTA', 'HUNZA',
     'HATTUSA', 'KABUL', 'SINGAPORE', 'GRANADA', 'CAHOKIA', 'ZANZIBAR', 'MITLA',
@@ -344,6 +355,25 @@ export function getLatestTurnStats(): CivStatistics[] | null {
   return latestTurn.civStats;
 }
 
+/**
+ * Civ 6 writes the human's row at a different point in the turn cycle than the AI
+ * rows, so the newest complete turn can be missing the player entirely — in a Rome
+ * game turn 219 lists every AI while Rome first appears under turn 220. Pull the
+ * player's most recent row in when that happens, so rankings include them.
+ */
+function withHumanRow(history: GameHistory, stats: CivStatistics[]): CivStatistics[] {
+  const human = getCurrentGameActors().find(a => a.isHuman);
+  if (!human || stats.some(s => s.rawCivName === human.civilization)) {
+    return stats;
+  }
+
+  for (let i = history.turns.length - 1; i >= 0; i--) {
+    const row = history.turns[i].civStats.find(s => s.rawCivName === human.civilization);
+    if (row) return [...stats, row];
+  }
+  return stats;
+}
+
 export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
   // Early exit if log file doesn't exist
   const statsPath = join(LOGS_PATH, PLAYER_STATS_FILE);
@@ -367,7 +397,7 @@ export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
 
     // If we have multiple major civs, this is a complete turn
     if (majorCivs.length > 1) {
-      return majorCivs;
+      return withHumanRow(history, majorCivs);
     }
   }
 
@@ -375,7 +405,7 @@ export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
   const latestStats = history.turns[history.turns.length - 1]?.civStats;
   if (!latestStats) return null;
 
-  return latestStats.filter(s => !s.isCityState);
+  return withHumanRow(history, latestStats.filter(s => !s.isCityState));
 }
 
 export function getStatsForTurn(turnNumber: number): CivStatistics[] | null {
