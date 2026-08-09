@@ -16,7 +16,7 @@ import type {
   StrategicOpportunity,
   CivStatistics,
 } from './types.js';
-import { getLogsDirectory } from './paths.js';
+import { getLogsDirectory, getUserOptionsPath } from './paths.js';
 
 const LOGS_PATH = getLogsDirectory();
 
@@ -955,7 +955,7 @@ export function formatCityStatus(
   }
 
   if (playerFoundingStats.length === 0 && playerCities.length === 0) {
-    return 'No city data available. Enable game logging with GameHistoryLogLevel=1 in UserOptions.txt.';
+    return `No city data available. Enable game logging with GameHistoryLogLevel=1 in ${getUserOptionsPath()}.`;
   }
 
   lines.push(`# City Status (Turn ${latestTurn})`);
@@ -1230,7 +1230,7 @@ export function formatCulturalGreatPeople(events: GreatPersonEvent[]): string {
 
 export function formatScoreBreakdown(scores: ScoreBreakdown[]): string {
   if (scores.length === 0) {
-    return 'No score data available. Enable game logging (GameHistoryLogLevel=1 in UserOptions.txt).';
+    return `No score data available. Enable game logging (GameHistoryLogLevel=1 in ${getUserOptionsPath()}).`;
   }
 
   const lines: string[] = [];

@@ -12,6 +12,7 @@ import {
   generateStrategyBrief,
   getSavesDirectory,
 } from './parser.js';
+import { getUserOptionsPath } from './paths.js';
 import {
   findHistoryFile,
   getLogsDirectory,
@@ -486,7 +487,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 text: `Game history logging is not enabled or no data has been recorded yet.
 
 To enable logging:
-1. The setting GameHistoryLogLevel has been set to 1 in UserOptions.txt
+1. The setting GameHistoryLogLevel has been set to 1 in ${getUserOptionsPath()}
 2. Load your game in Civ6 and play at least one turn
 3. The game will create a log file at: ${getLogsDirectory()}/GameCoreHistory1.xml
 
@@ -529,7 +530,7 @@ Once you've played a turn, try this command again.`,
             content: [
               {
                 type: 'text',
-                text: `Game history logging is not enabled. Enable it by setting GameHistoryLogLevel=1 in UserOptions.txt, then play at least one turn.`,
+                text: `Game history logging is not enabled. Enable it by setting GameHistoryLogLevel=1 in ${getUserOptionsPath()}, then play at least one turn.`,
               },
             ],
           };
@@ -568,7 +569,7 @@ Once you've played a turn, try this command again.`,
             content: [
               {
                 type: 'text',
-                text: `Game history logging is not enabled. Enable it by setting GameHistoryLogLevel=1 in UserOptions.txt, then play at least one turn.`,
+                text: `Game history logging is not enabled. Enable it by setting GameHistoryLogLevel=1 in ${getUserOptionsPath()}, then play at least one turn.`,
               },
             ],
           };
@@ -713,7 +714,7 @@ Once you've played a turn, try this command again.`,
             content: [
               {
                 type: 'text',
-                text: 'No city data available. Make sure game logging is enabled (GameHistoryLogLevel=1 in UserOptions.txt) and you have played at least one turn.',
+                text: `No city data available. Make sure game logging is enabled (GameHistoryLogLevel=1 in ${getUserOptionsPath()}) and you have played at least one turn.`,
               },
             ],
           };
@@ -813,7 +814,7 @@ Once you've played a turn, try this command again.`,
             content: [
               {
                 type: 'text',
-                text: 'No score data available. Enable game logging (GameHistoryLogLevel=1 in UserOptions.txt) and play at least one turn.',
+                text: `No score data available. Enable game logging (GameHistoryLogLevel=1 in ${getUserOptionsPath()}) and play at least one turn.`,
               },
             ],
           };
