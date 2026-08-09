@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { CivStatistics, VictoryProgress, GameHistory, TurnData, CivTrend } from './types.js';
 import { getLogsDirectory } from './paths.js';
-import { getCurrentGameActors, isKnownCityStateName } from './save-actors.js';
+import { getCurrentGameActors, isKnownCityStateName, saveMismatchWarning } from './save-actors.js';
 
 // Re-export for backwards compatibility
 export { getLogsDirectory } from './paths.js';
@@ -260,6 +260,20 @@ function isCityState(civName: string): boolean {
   return isKnownCityStateName(civName);
 }
 
+let scoreJoinCondition: string | null = null;
+
+/**
+ * Why the last parseGameHistory could not join scores, or null when it could. Without
+ * the join every score is 0 and the human's row is missing — a table that reads like a
+ * result rather than like a failure, which is exactly how the original bug survived so
+ * long. The formatters print this above the table instead.
+ */
+function scoreJoinWarning(): string | null {
+  return scoreJoinCondition === null
+    ? null
+    : `**Warning:** ${scoreJoinCondition}, so scores could not be joined to the logs — every score below reads 0 and the human player may be missing from the table.`;
+}
+
 export function parseGameHistory(): GameHistory | null {
   const rawStats = parsePlayerStatsCSV();
   if (rawStats.length === 0) {
@@ -301,6 +315,8 @@ export function parseGameHistory(): GameHistory | null {
       .filter(a => a.playerId !== undefined)
       .map(a => [a.civilization, a.playerId!] as const)
   );
+
+  scoreJoinCondition = saveMismatchWarning(civSet);
 
   // Convert to TurnData
   for (const [turn, stats] of turnMap) {
@@ -395,17 +411,32 @@ function withHumanRow(history: GameHistory, stats: CivStatistics[]): CivStatisti
 }
 
 /**
+ * The turn a table is actually about: the one most of its rows share. withHumanRow
+ * merges a single row from a neighbouring turn, and that row can be older as well as
+ * newer than the rest, so neither the smallest nor the largest turn identifies the
+ * table. On a tie the earliest-seen turn wins, which is the un-merged table's own —
+ * the merged row is appended last. Returns null for an empty table.
+ */
+function tableTurn(rows: { turn: number }[]): number | null {
+  const counts = new Map<number, number>();
+  for (const row of rows) counts.set(row.turn, (counts.get(row.turn) ?? 0) + 1);
+
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  return ranked.length === 0 ? null : ranked[0][0];
+}
+
+/**
  * A stats table can legitimately mix turns, because withHumanRow merges the human's
  * row from the turn Civ 6 happened to log it under. Callers label the table with a
  * single turn, so they have to say which rows are not from it.
  */
 function turnMixNote(rows: { civilization: string; turn: number }[]): string | null {
-  const baseTurn = Math.min(...rows.map(r => r.turn));
+  const baseTurn = tableTurn(rows);
   const offTurn = rows.filter(r => r.turn !== baseTurn);
-  if (offTurn.length === 0) return null;
+  if (baseTurn === null || offTurn.length === 0) return null;
 
   const named = offTurn.map(r => `${r.civilization} (turn ${r.turn})`).join(', ');
-  return `Note: ${named} — Civ 6 logs the human's row later in the turn cycle, so those values are newer than the rest of the table.`;
+  return `Note: ${named} — Civ 6 logs the human's row at a different point in the turn cycle, so that row is from a different turn than the rest of the table.`;
 }
 
 export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
@@ -518,9 +549,11 @@ export function formatStatsComparison(stats: CivStatistics[]): string {
 
   const lines: string[] = [];
   lines.push('# Civilization Statistics Comparison');
-  lines.push(`Turn: ${majorCivs.length > 0 ? Math.min(...majorCivs.map(s => s.turn)) : 'N/A'}`);
+  lines.push(`Turn: ${tableTurn(majorCivs) ?? 'N/A'}`);
   const note = turnMixNote(majorCivs);
   if (note) lines.push(note);
+  const warning = scoreJoinWarning();
+  if (warning) lines.push(warning);
   lines.push('');
 
   // Sort by score (descending)
@@ -557,6 +590,8 @@ export function formatVictoryProgress(progress: VictoryProgress[]): string {
   lines.push('# Victory Progress');
   const note = turnMixNote(progress);
   if (note) lines.push(note);
+  const warning = scoreJoinWarning();
+  if (warning) lines.push(warning);
   lines.push('');
 
   // Science Victory

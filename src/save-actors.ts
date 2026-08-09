@@ -171,3 +171,28 @@ export function getCurrentGameActors(): SaveActor[] {
   }
   return cache.actors;
 }
+
+/**
+ * Whether the current save can speak for the game these logs describe. Player ids and
+ * scores are joined through the save's slot order, so a missing save — or the newest
+ * save belonging to a different game, which happens as soon as the saves tree holds
+ * more than one — joins nothing. The result then looks exactly like a real one: every
+ * score reads 0 and the human's row disappears. Callers state this condition in their
+ * output instead of returning those numbers as if they were measured.
+ *
+ * `loggedCivs` are the raw civilization names the logs contain, without the
+ * `CIVILIZATION_` prefix. Returns the condition, or null when the save fits.
+ */
+export function saveMismatchWarning(loggedCivs: Set<string>): string | null {
+  const actors = getCurrentGameActors();
+  if (actors.length === 0) {
+    return 'no readable Civ 6 save was found';
+  }
+
+  const missing = actors
+    .filter(a => a.playerId !== undefined && !loggedCivs.has(a.civilization))
+    .map(a => a.civilization);
+  if (missing.length === 0) return null;
+
+  return `the newest save is a different game than these logs (it plays ${missing.join(', ')}, which the logs never mention)`;
+}
