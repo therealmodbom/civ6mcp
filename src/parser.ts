@@ -154,7 +154,7 @@ function decompressGameData(buffer: Buffer): Buffer | null {
  */
 function extractCivsFromActors(buffer: Buffer): CivInfo[] {
   return readActors(buffer)
-    .filter(a => a.isFullCiv)
+    .filter(a => a.isFullCiv && a.leader)
     .map(a => ({
       // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
       leader: formatLeaderName(a.leader.replace(/_ALT$/, '')),
@@ -202,15 +202,14 @@ function extractCivsFromHeader(headerText: string): { player: CivInfo | null; ai
         if (seenCivs.has(civ)) break;
         seenCivs.add(civ);
 
-        // Check if "Player" appears shortly after CIVILIZATION_LEVEL_FULL_CIV
-        const afterMarker = headerText.substring(pos, pos + 100);
-        const isHuman = afterMarker.includes('Player');
-
         allCivs.push({
           leader: getLeaderForCiv(civ),
           civilization: formatEnumValue(civ),
           type: 'full_civ',
-          isHuman,
+          // The header has no human/AI signal — "Players:" follows every marker, so
+          // the old `includes('Player')` test was true for all civs. Leave it false
+          // rather than let a meaningless flag decide the fallback path.
+          isHuman: false,
         });
         break;
       }
@@ -250,10 +249,10 @@ function extractCivsFromHeader(headerText: string): { player: CivInfo | null; ai
     }
   }
 
-  // All civs have same pattern after marker, so we need another way to identify the player
-  // For now, return all civs - player identification will happen later based on city names or other data
+  // The header carries no human/AI signal — "Players:" follows every marker — so the
+  // player is identified from the save's actor records instead, in parseSaveFile.
   return {
-    player: allCivs.length > 0 ? allCivs[0] : null,  // Will be replaced by proper detection
+    player: allCivs.length > 0 ? allCivs[0] : null,  // Provisional; the actor records decide
     aiCivs: allCivs.slice(1),
     cityStates: cityStates.slice(0, 15)
   };

@@ -17,6 +17,9 @@ import { getSavesDirectory } from './paths.js';
 const ACTOR_HUMAN = 3;
 const ACTOR_SLOT_INACTIVE = 2;
 
+// Below this a save cannot be complete; see readActors for why it matters.
+const MIN_PARSEABLE_SAVE_BYTES = 200_000;
+
 /**
  * Fallback classification for when no save is readable. The actor records are the
  * real source — this list only keeps rankings roughly sane in the meantime, and it
@@ -52,10 +55,15 @@ const require = createRequire(import.meta.url);
 let saveParser: typeof import('civ6-save-parser') | null = null;
 
 /**
- * civ6-save-parser guards its CLI block with `!module.parent`, which is true when
- * a CJS package is loaded from ESM — so merely importing it prints a usage line to
- * stdout. On a stdio MCP server that lands in the JSON-RPC stream and breaks every
- * client, so stdout is muted for the duration of the load.
+ * civ6-save-parser runs a CLI block guarded by `!module.parent`, which prints a
+ * usage line to stdout — on a stdio MCP server that lands in the JSON-RPC stream
+ * and breaks every client.
+ *
+ * `createRequire` already avoids it: on that path `module.parent` is set, so the
+ * block never runs. The stdout mute stays as defence in depth, because
+ * `module.parent` is deprecated and a future Node could leave it unset. It only
+ * covers stdout, though — a CLI block that did run with a positional argument
+ * would throw from `readFileSync` inside `require`, which the mute cannot help.
  */
 function loadSaveParser(): typeof import('civ6-save-parser') {
   if (!saveParser) {
@@ -71,6 +79,18 @@ function loadSaveParser(): typeof import('civ6-save-parser') {
 }
 
 export function readActors(buffer: Buffer): SaveActor[] {
+  // civ6-save-parser does not terminate on a truncated save: the CIV6 magic bytes
+  // pass first, and the walk over actor records then runs forever. Measured on a
+  // 1.7 MB save cut down — 60 kB and 85 kB never returned, 100 kB and up parsed in
+  // milliseconds. The smallest real save observed is 824 kB, so this threshold
+  // rejects only files that cannot be complete: an autosave still being written,
+  // an interrupted copy, a cloud placeholder. A running loop cannot be caught, so
+  // it has to be refused before the call.
+  if (buffer.length < MIN_PARSEABLE_SAVE_BYTES) {
+    console.error(`Save file too small to parse (${buffer.length} bytes) — still being written?`);
+    return [];
+  }
+
   try {
     const parsed = loadSaveParser().parse(buffer).parsed;
     const actors = [...(parsed.CIVS ?? []), ...(parsed.ACTORS ?? [])]
@@ -92,7 +112,10 @@ export function readActors(buffer: Buffer): SaveActor[] {
       if (!byCiv.has(actor.civilization)) byCiv.set(actor.civilization, actor);
     }
     return [...byCiv.values()];
-  } catch {
+  } catch (error) {
+    // Every caller falls back to a guess without these records, so say so —
+    // silence here looks exactly like the bug this module was written to fix.
+    console.error('Could not read actor records from save:', error);
     return [];
   }
 }
