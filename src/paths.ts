@@ -46,7 +46,7 @@ export function getUserOptionsPath(): string {
     : [
         // Current layout — same nesting the logs directory uses
         join(appSupport, "Sid Meier's Civilization VI", 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
-        join(appSupport, 'Firaxis Games', "Sid Meier's Civilization VI", 'UserOptions.txt'),
+        // The path this function used before, kept for older installs
         join(appSupport, "Sid Meier's Civilization VI", 'UserOptions.txt'),
       ];
 
