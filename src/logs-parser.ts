@@ -99,6 +99,27 @@ export function playerIdWarningBlock(): string {
   return `> **Warning:** ${warning}, so scores fall back to the order civilizations appear in the logs. That order is off by one whenever Civ 6 logs the human last, which puts the right numbers under the wrong civilization.\n\n`;
 }
 
+let witnessIdsCache: number[] | null = null;
+
+/** Real player ids from Game_PlayerScores.csv (minus save majors), sorted. */
+function getWitnessIds(fromSave: Map<number, string>): number[] {
+  if (witnessIdsCache !== null) return witnessIdsCache;
+
+  const filePath = join(LOGS_PATH, LOG_FILES.PLAYER_SCORES);
+  if (!existsSync(filePath)) return [];
+
+  const content = readFileSync(filePath, 'utf-8');
+  const ids = new Set<number>();
+  for (const line of content.trim().split('\n').slice(1)) {
+    const playerId = parseInt(line.split(',')[1]?.trim(), 10);
+    if (!isNaN(playerId)) ids.add(playerId);
+  }
+
+  for (const id of fromSave.keys()) ids.delete(id);
+  witnessIdsCache = [...ids].sort((a, b) => a - b);
+  return witnessIdsCache;
+}
+
 /**
  * Player id -> civilization name.
  *
@@ -121,10 +142,11 @@ export function buildPlayerIdMap(): Map<number, string> {
   if (fromSave.size === 0) return fromLogOrder;
 
   // City-states never reach the save's CIVS list, so the logs are the only source
-  // for their names. The human logged last displaces every id, not one. Use the
-  // save for majors, then place city-states sequentially from the log order at
-  // positions after the save's majors — removing the human from the log tail
-  // shifts every city-state forward by exactly one position.
+  // for their names. The human logged last displaces every id, not one. Zip the
+  // city-state sequence from the log order against the real player ids the game
+  // actually witnesses (from Game_PlayerScores.csv, minus save majors). Dense
+  // sequential placement misassigns when a city-state slot is empty — id 11 is
+  // absent from every per-player CSV in the live game but occupies a name here.
   const saveCivs = new Set(fromSave.values());
   const result = new Map(fromSave);
   const cityStates: string[] = [];
@@ -133,11 +155,9 @@ export function buildPlayerIdMap(): Map<number, string> {
     if (civ === 'FREE_CITIES') continue;   // real id 62/63, not this log position
     cityStates.push(civ);
   }
-  let nextId = fromSave.size;
-  for (const civ of cityStates) {
-    while (result.has(nextId)) nextId++;
-    result.set(nextId, civ);
-    nextId++;
+  const witnessIds = getWitnessIds(fromSave);
+  for (let i = 0; i < Math.min(cityStates.length, witnessIds.length); i++) {
+    result.set(witnessIds[i], cityStates[i]);
   }
   return result;
 }
