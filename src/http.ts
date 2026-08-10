@@ -117,11 +117,12 @@ function jsonRpcError(res: import('node:http').ServerResponse, status: number, c
 // without FIN holds its request open for the process lifetime: server.timeout is 0 and
 // requestTimeout stops applying once the request has been received, so nothing else
 // notices. Probes start after SESSION_IDLE_MS of socket silence and the peer's failure
-// to answer them closes the socket, which releases the guard and lets the sweep reclaim
-// the session. Preferred over an absolute session-age cap or treating a held stream as
-// idle: those bound the leak by disconnecting healthy long-lived clients too, whereas
-// keepalive separates a dead peer from a quiet one. The cost is that the detection
-// deadline is the OS probe budget (macOS: 75s x 8), not a number this file sets.
+// to answer them closes the socket, which releases the guard. Preferred over an absolute
+// session-age cap or treating a held stream as idle: those bound the leak by
+// disconnecting healthy long-lived clients too, whereas keepalive separates a dead peer
+// from a quiet one. Closing the dead response bumps lastSeen, so the sweep still waits
+// a further SESSION_IDLE_MS (+ one sweep interval) after the socket dies — worst case
+// ~2×SESSION_IDLE_MS + OS probe budget (macOS: 75s×8) + SWEEP_INTERVAL_MS.
 createHttpServer({ keepAlive: true, keepAliveInitialDelay: SESSION_IDLE_MS }, (req, res) => {
   void (async () => {
     try {

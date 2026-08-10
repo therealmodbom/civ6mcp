@@ -98,7 +98,7 @@ The server binds `127.0.0.1` only and has no authentication of its own. Put a pr
 
 `MCP_ALLOWED_ORIGINS` is not a way to let a web page talk to the server. No CORS headers are sent and a preflight `OPTIONS /mcp` is rejected, so a browser blocks the call whatever the variable says. It only narrows which non-browser clients may send an `Origin` header, which is why leaving it unset is the sensible default. Serving a browser client would mean CORS on a loopback endpoint that has no authentication of its own, and that is the proxy's job, not this server's.
 
-A client that disappears without closing its connection — a laptop that sleeps, a network that drops — keeps its session alive until the connection is probed and found dead, so a session can outlive `MCP_SESSION_IDLE_MS` by the operating system's keepalive budget (ten minutes on macOS defaults). Sessions are held in memory only; restarting the server clears them.
+A client that disappears without closing its connection — a laptop that sleeps, a network that drops — keeps its session alive until the connection is probed and found dead. Closing that dead connection then starts a fresh idle window before the sweep reclaims the session, so the worst case is about two times `MCP_SESSION_IDLE_MS` plus the operating system's keepalive budget (ten minutes on macOS defaults) plus one sweep interval — roughly seventy-one minutes at the defaults. Sessions are held in memory only; restarting the server clears them.
 
 ## Claude Project Setup (Recommended)
 
