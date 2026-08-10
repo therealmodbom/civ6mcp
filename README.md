@@ -48,8 +48,13 @@ An MCP (Model Context Protocol) server that provides Claude with real-time acces
 The MCP server reads data from Civilization VI's log files. You need to enable logging:
 
 1. Find your `UserOptions.txt` file:
-   - **macOS**: `~/Library/Application Support/Sid Meier's Civilization VI/UserOptions.txt`
+   - **macOS**: `~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/UserOptions.txt`
    - **Windows**: `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI\UserOptions.txt`
+
+   Civ VI has moved this file between updates, so older installs may keep it elsewhere —
+   `~/Library/Application Support/Sid Meier's Civilization VI/` on macOS, or
+   `%USERPROFILE%\Documents\My Games\Sid Meier's Civilization VI\` on Windows. The server
+   probes these locations and names the one it finds in its error messages.
 
 2. Add or modify this line:
    ```
