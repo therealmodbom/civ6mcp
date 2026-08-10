@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import type {
   DiplomaticRelation,
@@ -99,25 +99,32 @@ export function playerIdWarningBlock(): string {
   return `> **Warning:** ${warning}, so scores fall back to the order civilizations appear in the logs. That order is off by one whenever Civ 6 logs the human last, which puts the right numbers under the wrong civilization.\n\n`;
 }
 
-let witnessIdsCache: number[] | null = null;
+let witnessIdsCache: { mtimeMs: number; ids: number[] } | null = null;
 
-/** Real player ids from Game_PlayerScores.csv (minus save majors), sorted. */
+/** Real player ids from Game_PlayerScores.csv (minus save majors, free cities, barbarians), sorted. */
 function getWitnessIds(fromSave: Map<number, string>): number[] {
-  if (witnessIdsCache !== null) return witnessIdsCache;
-
   const filePath = join(LOGS_PATH, LOG_FILES.PLAYER_SCORES);
   if (!existsSync(filePath)) return [];
+
+  const { mtimeMs } = statSync(filePath);
+  if (witnessIdsCache?.mtimeMs === mtimeMs) {
+    const ids = new Set(witnessIdsCache.ids);
+    for (const id of fromSave.keys()) ids.delete(id);
+    return [...ids].sort((a, b) => a - b);
+  }
 
   const content = readFileSync(filePath, 'utf-8');
   const ids = new Set<number>();
   for (const line of content.trim().split('\n').slice(1)) {
     const playerId = parseInt(line.split(',')[1]?.trim(), 10);
-    if (!isNaN(playerId)) ids.add(playerId);
+    if (!isNaN(playerId) && playerId < 62) ids.add(playerId);
   }
 
+  const raw = [...ids].sort((a, b) => a - b);
+  witnessIdsCache = { mtimeMs, ids: raw };
+
   for (const id of fromSave.keys()) ids.delete(id);
-  witnessIdsCache = [...ids].sort((a, b) => a - b);
-  return witnessIdsCache;
+  return [...ids].sort((a, b) => a - b);
 }
 
 /**
