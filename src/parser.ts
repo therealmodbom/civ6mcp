@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { unzipSync, constants } from 'zlib';
+import { createRequire } from 'module';
 import type { SaveFileInfo, GameState, CivInfo, ModInfo } from './types.js';
 import {
   getLatestTurnStatsFullCivsOnly,
@@ -16,6 +17,39 @@ const SAVE_PATH = getSavesDirectory();
 // Binary markers from the save file format
 const COMPRESSED_DATA_END = Buffer.from([0, 0, 0xFF, 0xFF]);
 const ZLIB_HEADER = Buffer.from([0x78, 0x9C]);
+
+// ACTOR_AI_HUMAN values used by the save format: 3 = human, 1 = AI
+const ACTOR_HUMAN = 3;
+
+// Below this a save cannot be complete; see extractCivsFromActors for why it matters.
+const MIN_PARSEABLE_SAVE_BYTES = 200_000;
+
+const require = createRequire(import.meta.url);
+let saveParser: typeof import('civ6-save-parser') | null = null;
+
+/**
+ * civ6-save-parser runs a CLI block guarded by `!module.parent`, which prints a
+ * usage line to stdout — on a stdio MCP server that lands in the JSON-RPC stream
+ * and breaks every client.
+ *
+ * `createRequire` already avoids it: on that path `module.parent` is set, so the
+ * block never runs. The stdout mute stays as defence in depth, because
+ * `module.parent` is deprecated and a future Node could leave it unset. It only
+ * covers stdout, though — a CLI block that did run with a positional argument
+ * would throw from `readFileSync` inside `require`, which the mute cannot help.
+ */
+function loadSaveParser(): typeof import('civ6-save-parser') {
+  if (!saveParser) {
+    const write = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try {
+      saveParser = require('civ6-save-parser');
+    } finally {
+      process.stdout.write = write;
+    }
+  }
+  return saveParser!;
+}
 
 // Known binary markers for game data
 const MARKERS = {
@@ -146,6 +180,47 @@ function decompressGameData(buffer: Buffer): Buffer | null {
   }
 }
 
+/**
+ * Read the civs from the save's actor records. ACTOR_AI_HUMAN is the game's own
+ * human/AI flag (3 = human, 1 = AI), so this identifies the player directly
+ * instead of inferring it from city names.
+ */
+function extractCivsFromActors(buffer: Buffer): CivInfo[] {
+  // civ6-save-parser does not terminate on a truncated save: the CIV6 magic bytes
+  // pass first, and the walk over actor records then runs forever. Measured on a
+  // 1.7 MB save cut down — 60 kB and 85 kB never returned, 100 kB and up parsed in
+  // milliseconds. The smallest real save observed is 824 kB, so this threshold
+  // rejects only files that cannot be complete: an autosave still being written,
+  // an interrupted copy, a cloud placeholder. A running loop cannot be caught, so
+  // it has to be refused before the call.
+  if (buffer.length < MIN_PARSEABLE_SAVE_BYTES) {
+    console.error(`Save file too small to parse (${buffer.length} bytes) — still being written?`);
+    return [];
+  }
+
+  try {
+    const civs = loadSaveParser().parse(buffer).parsed.CIVS ?? [];
+    return civs
+      .filter(c =>
+        c.ACTOR_TYPE?.data === 'CIVILIZATION_LEVEL_FULL_CIV' &&
+        c.ACTOR_NAME?.data &&
+        c.LEADER_NAME?.data
+      )
+      .map(c => ({
+        // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
+        leader: formatLeaderName(c.LEADER_NAME!.data.replace(/^LEADER_/, '').replace(/_ALT$/, '')),
+        civilization: formatEnumValue(c.ACTOR_NAME!.data.replace(/^CIVILIZATION_/, '')),
+        type: 'full_civ' as const,
+        isHuman: c.ACTOR_AI_HUMAN?.data === ACTOR_HUMAN,
+      }));
+  } catch (error) {
+    // Falling back to the header means losing the human/AI flag, so say so —
+    // silence here looks exactly like the bug this function was written to fix.
+    console.error('Could not read actor records from save:', error);
+    return [];
+  }
+}
+
 function extractCivsFromHeader(headerText: string): { player: CivInfo | null; aiCivs: CivInfo[]; cityStates: string[] } {
   const allCivs: CivInfo[] = [];
   const cityStates: string[] = [];
@@ -184,15 +259,14 @@ function extractCivsFromHeader(headerText: string): { player: CivInfo | null; ai
         if (seenCivs.has(civ)) break;
         seenCivs.add(civ);
 
-        // Check if "Player" appears shortly after CIVILIZATION_LEVEL_FULL_CIV
-        const afterMarker = headerText.substring(pos, pos + 100);
-        const isHuman = afterMarker.includes('Player');
-
         allCivs.push({
           leader: getLeaderForCiv(civ),
           civilization: formatEnumValue(civ),
           type: 'full_civ',
-          isHuman,
+          // The header has no human/AI signal — "Players:" follows every marker, so
+          // the old `includes('Player')` test was true for all civs. Leave it false
+          // rather than let a meaningless flag decide the fallback path.
+          isHuman: false,
         });
         break;
       }
@@ -232,10 +306,10 @@ function extractCivsFromHeader(headerText: string): { player: CivInfo | null; ai
     }
   }
 
-  // All civs have same pattern after marker, so we need another way to identify the player
-  // For now, return all civs - player identification will happen later based on city names or other data
+  // The header carries no human/AI signal — "Players:" follows every marker — so the
+  // player is identified from the save's actor records instead, in parseSaveFile.
   return {
-    player: allCivs.length > 0 ? allCivs[0] : null,  // Will be replaced by proper detection
+    player: allCivs.length > 0 ? allCivs[0] : null,  // Provisional; the actor records decide
     aiCivs: allCivs.slice(1),
     cityStates: cityStates.slice(0, 15)
   };
@@ -392,6 +466,14 @@ export function parseSaveFile(filePath: string): GameState {
   const { player: headerPlayer, aiCivs: headerAiCivs, cityStates: headerCityStates } = extractCivsFromHeader(headerSection);
   let allCivs = headerPlayer ? [headerPlayer, ...headerAiCivs] : [...headerAiCivs];
 
+  // Prefer the save's own actor records: they carry ACTOR_AI_HUMAN, the only
+  // reliable human/AI flag. The header text scan has none — "Players:" follows
+  // every CIVILIZATION_LEVEL_FULL_CIV marker, so its heuristic matches all civs.
+  const actorCivs = extractCivsFromActors(buffer);
+  if (actorCivs.length > 0) {
+    allCivs = actorCivs;
+  }
+
   // Extract mods
   const mods: ModInfo[] = [];
   const modMatches = headerSection.matchAll(/([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\s*\{"LOC_([A-Z_]+)_MOD_TITLE"/gi);
@@ -414,23 +496,14 @@ export function parseSaveFile(filePath: string): GameState {
     // Decompression failed, continue with header data
   }
 
-  // Identify player civ based on player cities
+  // Identify the player civ by its human flag
   let playerCiv: CivInfo | null = null;
   let otherCivs: CivInfo[] = [];
 
-  if (decompressedInfo?.playerCities && decompressedInfo.playerCities.length > 0) {
-    // Find which civ matches the player cities based on known city-civ mappings
-    const playerCivName = identifyCivFromCities(decompressedInfo.playerCities);
-    if (playerCivName) {
-      // Find this civ in our list
-      const matchIndex = allCivs.findIndex(c =>
-        c.civilization.toUpperCase() === playerCivName.toUpperCase());
-      if (matchIndex >= 0) {
-        playerCiv = allCivs[matchIndex];
-        playerCiv.isHuman = true;
-        otherCivs = allCivs.filter((_, i) => i !== matchIndex);
-      }
-    }
+  const humanIndex = allCivs.findIndex(c => c.isHuman);
+  if (humanIndex >= 0) {
+    playerCiv = allCivs[humanIndex];
+    otherCivs = allCivs.filter((_, i) => i !== humanIndex);
   }
 
   // Fallback: use first civ as player
@@ -469,28 +542,6 @@ export function parseSaveFile(filePath: string): GameState {
   };
 }
 
-// Map known cities to their civilization
-function identifyCivFromCities(cities: string[]): string | null {
-  const cityToCiv: Record<string, string> = {
-    'Hue': 'VIETNAM', 'Da Nang': 'VIETNAM', 'Hanoi': 'VIETNAM', 'Saigon': 'VIETNAM',
-    'Nha Trang': 'VIETNAM', 'Can Tho': 'VIETNAM', 'Hai Phong': 'VIETNAM', 'Vinh': 'VIETNAM',
-    'Thang Long': 'VIETNAM', 'Bien Hoa': 'VIETNAM',
-    'Tbilisi': 'GEORGIA', 'Kutaisi': 'GEORGIA', 'Batumi': 'GEORGIA',
-    'Persepolis': 'PERSIA', 'Pasargadae': 'PERSIA', 'Susa': 'PERSIA',
-    'Ottawa': 'CANADA', 'Toronto': 'CANADA', 'Montreal': 'CANADA',
-    'Amsterdam': 'NETHERLANDS', 'Rotterdam': 'NETHERLANDS', 'The Hague': 'NETHERLANDS',
-    'Istanbul': 'OTTOMAN', 'Ankara': 'OTTOMAN', 'Edirne': 'OTTOMAN',
-    'Rome': 'ROME', 'Antium': 'ROME', 'Cumae': 'ROME',
-    'Alexandria': 'EGYPT', 'Thebes': 'EGYPT', 'Memphis': 'EGYPT',
-  };
-
-  for (const city of cities) {
-    const civ = cityToCiv[city];
-    if (civ) return civ;
-  }
-  return null;
-}
-
 interface DecompressedInfo {
   technologies: string[];
   civics: string[];
@@ -524,11 +575,9 @@ function analyzeDecompressedData(data: Buffer): DecompressedInfo {
   const cityNames = [...new Set((text.match(/LOC_CITY_NAME_([A-Z_]+)/g) || []))]
     .map(c => formatEnumValue(c.replace('LOC_CITY_NAME_', '')));
 
-  // Try to identify player cities (Vietnam cities for Lady Trieu)
-  const vietnamCities = ['THANG_LONG', 'HUE', 'HANOI', 'SAIGON', 'DA_NANG', 'HAI_PHONG', 'NHA_TRANG', 'CAN_THO', 'BIEN_HOA', 'VINH'];
-  const playerCities = vietnamCities
-    .filter(c => text.includes(c))
-    .map(c => formatEnumValue(c));
+  // City ownership is not recoverable from this flat text scan — LOC_CITY_NAME_*
+  // entries carry no owner — so player cities stay empty rather than guessed.
+  const playerCities: string[] = [];
 
   // City-states active in the game
   const cityStates = [...new Set((text.match(/CIVILIZATION_([A-Z_]+)/g) || []))]
