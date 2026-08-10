@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import type {
   DiplomaticRelation,
@@ -17,6 +17,7 @@ import type {
   CivStatistics,
 } from './types.js';
 import { getLogsDirectory, getUserOptionsPath } from './paths.js';
+import { getCurrentGameActors, saveMismatchWarning } from './save-actors.js';
 
 const LOGS_PATH = getLogsDirectory();
 
@@ -37,8 +38,14 @@ const LOG_FILES = {
 
 // ============ Player ID Mapping ============
 
-// Build mapping from Player_Stats.csv (has both player index and civ name)
-export function buildPlayerIdMap(): Map<number, string> {
+/**
+ * Order civilizations first appear in Player_Stats.csv, used as the player id.
+ *
+ * That assumption is wrong whenever Civ 6 logs the human's row after the AI rows: the
+ * human then lands at the end instead of at their real id, shifting every other civ by
+ * one. Kept only for when no save is readable — `buildPlayerIdMap` prefers the save.
+ */
+function buildPlayerIdMapFromLogOrder(): Map<number, string> {
   const playerMap = new Map<number, string>();
   const statsPath = join(LOGS_PATH, LOG_FILES.PLAYER_STATS);
 
@@ -71,6 +78,95 @@ export function buildPlayerIdMap(): Map<number, string> {
   }
 
   return playerMap;
+}
+
+let playerIdWarning: string | null = null;
+
+/**
+ * The condition behind the last `buildPlayerIdMap` call, or null when the save fits.
+ * Formatters print it, because a player id resolved from the wrong source produces a
+ * table that is wrong in the labels rather than in the numbers — the hardest kind to
+ * notice.
+ */
+export function getPlayerIdWarning(): string | null {
+  return playerIdWarning;
+}
+
+/** The warning as a markdown block to prepend to formatted output, or "" when clean. */
+export function playerIdWarningBlock(): string {
+  const warning = getPlayerIdWarning();
+  if (!warning) return '';
+  return `> **Warning:** ${warning}, so scores fall back to the order civilizations appear in the logs. That order is off by one whenever Civ 6 logs the human last, which puts the right numbers under the wrong civilization.\n\n`;
+}
+
+let witnessIdsCache: { mtimeMs: number; ids: number[] } | null = null;
+
+/** Real player ids from Game_PlayerScores.csv (minus save majors, free cities, barbarians), sorted. */
+function getWitnessIds(fromSave: Map<number, string>): number[] {
+  const filePath = join(LOGS_PATH, LOG_FILES.PLAYER_SCORES);
+  if (!existsSync(filePath)) return [];
+
+  const { mtimeMs } = statSync(filePath);
+  if (witnessIdsCache?.mtimeMs === mtimeMs) {
+    const ids = new Set(witnessIdsCache.ids);
+    for (const id of fromSave.keys()) ids.delete(id);
+    return [...ids].sort((a, b) => a - b);
+  }
+
+  const content = readFileSync(filePath, 'utf-8');
+  const ids = new Set<number>();
+  for (const line of content.trim().split('\n').slice(1)) {
+    const playerId = parseInt(line.split(',')[1]?.trim(), 10);
+    if (!isNaN(playerId) && playerId < 62) ids.add(playerId);
+  }
+
+  const raw = [...ids].sort((a, b) => a - b);
+  witnessIdsCache = { mtimeMs, ids: raw };
+
+  for (const id of fromSave.keys()) ids.delete(id);
+  return [...ids].sort((a, b) => a - b);
+}
+
+/**
+ * Player id -> civilization name.
+ *
+ * The save records this directly: a civ's position in the save's CIVS list is the id
+ * the CSV logs write in their Player column. Deriving it from log order instead is off
+ * by one as soon as the human is logged last, which is what printed Rome's 727 under
+ * Canada and China's under a city-state. Fall back to log order only when the save
+ * cannot answer — and say so, since both maps produce a full-looking table either way.
+ */
+export function buildPlayerIdMap(): Map<number, string> {
+  const fromLogOrder = buildPlayerIdMapFromLogOrder();
+  playerIdWarning = saveMismatchWarning(new Set(fromLogOrder.values()));
+  if (playerIdWarning !== null) return fromLogOrder;
+
+  const fromSave = new Map(
+    getCurrentGameActors()
+      .filter(a => a.playerId !== undefined)
+      .map(a => [a.playerId!, a.civilization] as const)
+  );
+  if (fromSave.size === 0) return fromLogOrder;
+
+  // City-states never reach the save's CIVS list, so the logs are the only source
+  // for their names. The human logged last displaces every id, not one. Zip the
+  // city-state sequence from the log order against the real player ids the game
+  // actually witnesses (from Game_PlayerScores.csv, minus save majors). Dense
+  // sequential placement misassigns when a city-state slot is empty — id 11 is
+  // absent from every per-player CSV in the live game but occupies a name here.
+  const saveCivs = new Set(fromSave.values());
+  const result = new Map(fromSave);
+  const cityStates: string[] = [];
+  for (const [_id, civ] of fromLogOrder) {
+    if (saveCivs.has(civ)) continue;       // this civ is already at its correct position
+    if (civ === 'FREE_CITIES') continue;   // real id 62/63, not this log position
+    cityStates.push(civ);
+  }
+  const witnessIds = getWitnessIds(fromSave);
+  for (let i = 0; i < Math.min(cityStates.length, witnessIds.length); i++) {
+    result.set(witnessIds[i], cityStates[i]);
+  }
+  return result;
 }
 
 // Get civilization name from player ID
@@ -1251,6 +1347,11 @@ export function formatScoreBreakdown(scores: ScoreBreakdown[]): string {
 
   lines.push(`# Score Breakdown (Turn ${latestTurn})`);
   lines.push('');
+  const warning = getPlayerIdWarning();
+  if (warning) {
+    lines.push(`> **Warning:** ${warning}, so scores fall back to the order civilizations appear in the logs. That order is off by one whenever Civ 6 logs the human last, which puts the right numbers under the wrong civilization.`);
+    lines.push('');
+  }
   lines.push('*Understand where each civilization\'s score comes from.*');
   lines.push('');
 

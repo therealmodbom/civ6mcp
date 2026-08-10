@@ -1,8 +1,8 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import { unzipSync, constants } from 'zlib';
-import { createRequire } from 'module';
 import type { SaveFileInfo, GameState, CivInfo, ModInfo } from './types.js';
+import { readActors, isKnownCityStateName } from './save-actors.js';
 import {
   getLatestTurnStatsFullCivsOnly,
   calculateVictoryProgress,
@@ -17,39 +17,6 @@ const SAVE_PATH = getSavesDirectory();
 // Binary markers from the save file format
 const COMPRESSED_DATA_END = Buffer.from([0, 0, 0xFF, 0xFF]);
 const ZLIB_HEADER = Buffer.from([0x78, 0x9C]);
-
-// ACTOR_AI_HUMAN values used by the save format: 3 = human, 1 = AI
-const ACTOR_HUMAN = 3;
-
-// Below this a save cannot be complete; see extractCivsFromActors for why it matters.
-const MIN_PARSEABLE_SAVE_BYTES = 200_000;
-
-const require = createRequire(import.meta.url);
-let saveParser: typeof import('civ6-save-parser') | null = null;
-
-/**
- * civ6-save-parser runs a CLI block guarded by `!module.parent`, which prints a
- * usage line to stdout — on a stdio MCP server that lands in the JSON-RPC stream
- * and breaks every client.
- *
- * `createRequire` already avoids it: on that path `module.parent` is set, so the
- * block never runs. The stdout mute stays as defence in depth, because
- * `module.parent` is deprecated and a future Node could leave it unset. It only
- * covers stdout, though — a CLI block that did run with a positional argument
- * would throw from `readFileSync` inside `require`, which the mute cannot help.
- */
-function loadSaveParser(): typeof import('civ6-save-parser') {
-  if (!saveParser) {
-    const write = process.stdout.write.bind(process.stdout);
-    process.stdout.write = () => true;
-    try {
-      saveParser = require('civ6-save-parser');
-    } finally {
-      process.stdout.write = write;
-    }
-  }
-  return saveParser!;
-}
 
 // Known binary markers for game data
 const MARKERS = {
@@ -186,39 +153,15 @@ function decompressGameData(buffer: Buffer): Buffer | null {
  * instead of inferring it from city names.
  */
 function extractCivsFromActors(buffer: Buffer): CivInfo[] {
-  // civ6-save-parser does not terminate on a truncated save: the CIV6 magic bytes
-  // pass first, and the walk over actor records then runs forever. Measured on a
-  // 1.7 MB save cut down — 60 kB and 85 kB never returned, 100 kB and up parsed in
-  // milliseconds. The smallest real save observed is 824 kB, so this threshold
-  // rejects only files that cannot be complete: an autosave still being written,
-  // an interrupted copy, a cloud placeholder. A running loop cannot be caught, so
-  // it has to be refused before the call.
-  if (buffer.length < MIN_PARSEABLE_SAVE_BYTES) {
-    console.error(`Save file too small to parse (${buffer.length} bytes) — still being written?`);
-    return [];
-  }
-
-  try {
-    const civs = loadSaveParser().parse(buffer).parsed.CIVS ?? [];
-    return civs
-      .filter(c =>
-        c.ACTOR_TYPE?.data === 'CIVILIZATION_LEVEL_FULL_CIV' &&
-        c.ACTOR_NAME?.data &&
-        c.LEADER_NAME?.data
-      )
-      .map(c => ({
-        // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
-        leader: formatLeaderName(c.LEADER_NAME!.data.replace(/^LEADER_/, '').replace(/_ALT$/, '')),
-        civilization: formatEnumValue(c.ACTOR_NAME!.data.replace(/^CIVILIZATION_/, '')),
-        type: 'full_civ' as const,
-        isHuman: c.ACTOR_AI_HUMAN?.data === ACTOR_HUMAN,
-      }));
-  } catch (error) {
-    // Falling back to the header means losing the human/AI flag, so say so —
-    // silence here looks exactly like the bug this function was written to fix.
-    console.error('Could not read actor records from save:', error);
-    return [];
-  }
+  return readActors(buffer)
+    .filter(a => a.isFullCiv && a.leader)
+    .map(a => ({
+      // _ALT marks an alternate portrait of the same leader (LEADER_QIN_ALT)
+      leader: formatLeaderName(a.leader.replace(/_ALT$/, '')),
+      civilization: formatEnumValue(a.civilization),
+      type: 'full_civ' as const,
+      isHuman: a.isHuman,
+    }));
 }
 
 function extractCivsFromHeader(headerText: string): { player: CivInfo | null; aiCivs: CivInfo[]; cityStates: string[] } {
@@ -630,16 +573,7 @@ function cleanWonderName(building: string): string {
 }
 
 function isCityState(civ: string): boolean {
-  const cityStates = [
-    'HATTUSA', 'KABUL', 'SINGAPORE', 'NGAZARGAMU', 'HUNZA', 'LA_VENTA', 'AKKAD',
-    'TARUGA', 'BRUSSELS', 'GENEVA', 'BABYLON', 'MUSCAT', 'VALLETTA', 'BUENOS_AIRES',
-    'ANTANANARIVO', 'ZANZIBAR', 'KUMASI', 'VILNIUS', 'BOLOGNA', 'FEZ', 'JERUSALEM',
-    'KANDY', 'YEREVAN', 'VATICAN_CITY', 'AUCKLAND', 'GRANADA', 'CAHOKIA',
-    'MITLA', 'JOHANNESBURG', 'NAZCA', 'AYUTTHAYA', 'CAGUANA', 'CHINGUETTI',
-    'HONG_KONG', 'MOHENJO_DARO', 'NAN_MADOL', 'PRESLAV', 'RAPA_NUI', 'TORONTO',
-    'WOLIN', 'ARMAGH', 'LAHORE', 'SAMARKAND', 'MOGADISHU', 'NALANDA',
-  ];
-  return cityStates.some(cs => civ.includes(cs));
+  return isKnownCityStateName(civ);
 }
 
 function formatEnumValue(value: string): string {

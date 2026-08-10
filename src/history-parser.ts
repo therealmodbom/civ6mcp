@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { CivStatistics, VictoryProgress, GameHistory, TurnData, CivTrend } from './types.js';
 import { getLogsDirectory } from './paths.js';
+import { getCurrentGameActors, isKnownCityStateName, saveMismatchWarning } from './save-actors.js';
 
 // Re-export for backwards compatibility
 export { getLogsDirectory } from './paths.js';
@@ -245,15 +246,32 @@ function getCivDisplayInfo(rawName: string): { civ: string; leader: string } {
   return { civ: formatted, leader: formatted };
 }
 
+/**
+ * The CSV logs list city-states as ordinary CIVILIZATION_* rows, with nothing to
+ * tell them apart from major civs. The current save does carry that distinction,
+ * so ask it first; the name list below only covers a save being unreadable.
+ */
 function isCityState(civName: string): boolean {
-  const cityStates = [
-    'TARUGA', 'AKKAD', 'NGAZARGAMU', 'BRUSSELS', 'BABYLON', 'LA_VENTA', 'HUNZA',
-    'HATTUSA', 'KABUL', 'SINGAPORE', 'GRANADA', 'CAHOKIA', 'ZANZIBAR', 'MITLA',
-    'JOHANNESBURG', 'MUSCAT', 'GENEVA', 'VALLETTA', 'BUENOS_AIRES', 'ANTANANARIVO',
-    'KUMASI', 'VILNIUS', 'BOLOGNA', 'FEZ', 'JERUSALEM', 'KANDY', 'YEREVAN',
-    'VATICAN_CITY', 'AUCKLAND', 'NAZCA', 'SAMARKAND', 'ANTIOCH', 'BANDAR_BRUNEI',
-  ];
-  return cityStates.includes(civName) || civName === 'FREE_CITIES';
+  const actor = getCurrentGameActors().find(a => a.civilization === civName);
+  if (actor) {
+    return !actor.isFullCiv;
+  }
+
+  return isKnownCityStateName(civName);
+}
+
+let scoreJoinCondition: string | null = null;
+
+/**
+ * Why the last parseGameHistory could not join scores, or null when it could. Without
+ * the join every score is 0 and the human's row is missing — a table that reads like a
+ * result rather than like a failure, which is exactly how the original bug survived so
+ * long. The formatters print this above the table instead.
+ */
+function scoreJoinWarning(): string | null {
+  return scoreJoinCondition === null
+    ? null
+    : `**Warning:** ${scoreJoinCondition}, so scores could not be joined to the logs — every score below reads 0 and the human player may be missing from the table.`;
 }
 
 export function parseGameHistory(): GameHistory | null {
@@ -289,16 +307,40 @@ export function parseGameHistory(): GameHistory | null {
     civSet.add(stat.civilization);
   }
 
+  // Player_Stats.csv identifies a row by civilization, Game_PlayerScores.csv by
+  // player id, so the two are joined through the save's slot order. Only major
+  // civs get an id from it, which is what the rankings need; city-states score 0.
+  const actors = getCurrentGameActors();
+  const playerIds = new Map(
+    actors
+      .filter(a => a.playerId !== undefined)
+      .map(a => [a.civilization, a.playerId!] as const)
+  );
+
+  // Only warn when the join actually lost data among major civs — city-states
+  // never resolve a playerId, so counting them makes the guard always-fire.
+  // Classify with isFullCiv from the save (canonical), not the hardcoded name
+  // list that is documented as unable to be complete.
+  const isFullCiv = new Map(actors.map(a => [a.civilization, a.isFullCiv]));
+  const mismatchWarning = saveMismatchWarning(civSet);
+  if (mismatchWarning) {
+    const majorCivs = [...civSet].filter(c => isFullCiv.get(c) ?? false);
+    const resolved = majorCivs.filter(c => playerIds.has(c));
+    if (resolved.length < majorCivs.length) {
+      scoreJoinCondition = mismatchWarning;
+    }
+  }
+
   // Convert to TurnData
   for (const [turn, stats] of turnMap) {
     const turnScores = scoresByTurn.get(turn);
 
     const turnData: TurnData = {
       turn,
-      civStats: stats.map((s, index) => {
+      civStats: stats.map(s => {
         const displayInfo = getCivDisplayInfo(s.civilization);
-        // Match scores by index - civs appear in same order in both files
-        const score = turnScores?.get(index) ?? 0;
+        const playerId = playerIds.get(s.civilization);
+        const score = playerId === undefined ? 0 : turnScores?.get(playerId) ?? 0;
         return {
           civilization: displayInfo.civ,
           leader: displayInfo.leader,
@@ -344,6 +386,72 @@ export function getLatestTurnStats(): CivStatistics[] | null {
   return latestTurn.civStats;
 }
 
+/**
+ * How far from the table's own turn a merged human row may be. The gap this exists
+ * for is one turn; two allows for a log written across a turn boundary. Beyond that
+ * the row is stale — the player is eliminated, or the log stopped covering them —
+ * and a years-old row does not belong in a current ranking.
+ */
+const MAX_HUMAN_ROW_TURN_GAP = 2;
+
+/**
+ * Civ 6 writes the human's row at a different point in the turn cycle than the AI
+ * rows, so the newest complete turn can be missing the player entirely — in a Rome
+ * game turn 219 lists every AI while Rome first appears under turn 220. Pull the
+ * player's most recent row in when that happens, so rankings include them.
+ *
+ * The merged row keeps its own `turn`, which is how callers can tell the table
+ * spans two turns; see turnMixNote.
+ */
+function withHumanRow(history: GameHistory, stats: CivStatistics[]): CivStatistics[] {
+  const human = getCurrentGameActors().find(a => a.isHuman);
+  if (!human || stats.some(s => s.rawCivName === human.civilization)) {
+    return stats;
+  }
+
+  const baseTurn = stats[0]?.turn ?? history.turns[history.turns.length - 1]?.turn;
+  if (baseTurn === undefined) return stats;
+
+  for (let i = history.turns.length - 1; i >= 0; i--) {
+    const { turn, civStats } = history.turns[i];
+    if (turn < baseTurn - MAX_HUMAN_ROW_TURN_GAP) break;
+    if (turn > baseTurn + MAX_HUMAN_ROW_TURN_GAP) continue;
+
+    const row = civStats.find(s => s.rawCivName === human.civilization);
+    if (row) return [...stats, row];
+  }
+  return stats;
+}
+
+/**
+ * The turn a table is actually about: the one most of its rows share. withHumanRow
+ * merges a single row from a neighbouring turn, and that row can be older as well as
+ * newer than the rest, so neither the smallest nor the largest turn identifies the
+ * table. On a tie the earliest-seen turn wins, which is the un-merged table's own —
+ * the merged row is appended last. Returns null for an empty table.
+ */
+function tableTurn(rows: { turn: number }[]): number | null {
+  const counts = new Map<number, number>();
+  for (const row of rows) counts.set(row.turn, (counts.get(row.turn) ?? 0) + 1);
+
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  return ranked.length === 0 ? null : ranked[0][0];
+}
+
+/**
+ * A stats table can legitimately mix turns, because withHumanRow merges the human's
+ * row from the turn Civ 6 happened to log it under. Callers label the table with a
+ * single turn, so they have to say which rows are not from it.
+ */
+function turnMixNote(rows: { civilization: string; turn: number }[]): string | null {
+  const baseTurn = tableTurn(rows);
+  const offTurn = rows.filter(r => r.turn !== baseTurn);
+  if (baseTurn === null || offTurn.length === 0) return null;
+
+  const named = offTurn.map(r => `${r.civilization} (turn ${r.turn})`).join(', ');
+  return `Note: ${named} — Civ 6 logs the human's row at a different point in the turn cycle, so that row is from a different turn than the rest of the table.`;
+}
+
 export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
   // Early exit if log file doesn't exist
   const statsPath = join(LOGS_PATH, PLAYER_STATS_FILE);
@@ -367,7 +475,7 @@ export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
 
     // If we have multiple major civs, this is a complete turn
     if (majorCivs.length > 1) {
-      return majorCivs;
+      return withHumanRow(history, majorCivs);
     }
   }
 
@@ -375,7 +483,7 @@ export function getLatestTurnStatsFullCivsOnly(): CivStatistics[] | null {
   const latestStats = history.turns[history.turns.length - 1]?.civStats;
   if (!latestStats) return null;
 
-  return latestStats.filter(s => !s.isCityState);
+  return withHumanRow(history, latestStats.filter(s => !s.isCityState));
 }
 
 export function getStatsForTurn(turnNumber: number): CivStatistics[] | null {
@@ -411,6 +519,7 @@ export function calculateVictoryProgress(stats: CivStatistics[]): VictoryProgres
     return {
       civilization: stat.civilization,
       leader: stat.leader,
+      turn: stat.turn,
       science: {
         position: sciencePos,
         techsResearched: stat.techsResearched,
@@ -453,7 +562,11 @@ export function formatStatsComparison(stats: CivStatistics[]): string {
 
   const lines: string[] = [];
   lines.push('# Civilization Statistics Comparison');
-  lines.push(`Turn: ${majorCivs[0]?.turn || 'N/A'}`);
+  lines.push(`Turn: ${tableTurn(majorCivs) ?? 'N/A'}`);
+  const note = turnMixNote(majorCivs);
+  if (note) lines.push(note);
+  const warning = scoreJoinWarning();
+  if (warning) lines.push(warning);
   lines.push('');
 
   // Sort by score (descending)
@@ -488,6 +601,10 @@ export function formatVictoryProgress(progress: VictoryProgress[]): string {
 
   const lines: string[] = [];
   lines.push('# Victory Progress');
+  const note = turnMixNote(progress);
+  if (note) lines.push(note);
+  const warning = scoreJoinWarning();
+  if (warning) lines.push(warning);
   lines.push('');
 
   // Science Victory

@@ -52,6 +52,7 @@ import {
   formatCulturalGreatPeople,
   formatScoreBreakdown,
   generateStrategicOverview,
+  playerIdWarningBlock,
 } from './logs-parser.js';
 
 // In-memory storage for game context notes
@@ -631,7 +632,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatDiplomacyStatus(relations, parsed.civilization);
+        const formatted = playerIdWarningBlock() + formatDiplomacyStatus(relations, parsed.civilization);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -652,7 +653,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatDiplomacyModifiers(modifiers, parsed.civilization);
+        const formatted = playerIdWarningBlock() + formatDiplomacyModifiers(modifiers, parsed.civilization);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -672,7 +673,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatMilitaryIntelligence(intel);
+        const formatted = playerIdWarningBlock() + formatMilitaryIntelligence(intel);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -693,7 +694,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatCombatLog(records, parsed.turns);
+        const formatted = playerIdWarningBlock() + formatCombatLog(records, parsed.turns);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -756,7 +757,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatTechStatus(progress);
+        const formatted = playerIdWarningBlock() + formatTechStatus(progress);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -776,7 +777,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatWorldCongress(votes, results);
+        const formatted = playerIdWarningBlock() + formatWorldCongress(votes, results);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -796,7 +797,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatGreatPeople(events);
+        const formatted = playerIdWarningBlock() + formatGreatPeople(events);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -816,7 +817,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = formatCulturalGreatPeople(events);
+        const formatted = playerIdWarningBlock() + formatCulturalGreatPeople(events);
         return {
           content: [{ type: 'text', text: formatted }],
         };
