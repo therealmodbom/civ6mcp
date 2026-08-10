@@ -316,7 +316,15 @@ export function parseGameHistory(): GameHistory | null {
       .map(a => [a.civilization, a.playerId!] as const)
   );
 
-  scoreJoinCondition = saveMismatchWarning(civSet);
+  // Only warn when the join actually lost data — a mismatch that resolves every
+  // civ is a false alarm, not a degraded table.
+  const mismatchWarning = saveMismatchWarning(civSet);
+  if (mismatchWarning) {
+    const resolved = [...civSet].filter(c => playerIds.has(c));
+    if (resolved.length < civSet.size) {
+      scoreJoinCondition = mismatchWarning;
+    }
+  }
 
   // Convert to TurnData
   for (const [turn, stats] of turnMap) {

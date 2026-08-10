@@ -189,10 +189,26 @@ export function saveMismatchWarning(loggedCivs: Set<string>): string | null {
     return 'no readable Civ 6 save was found';
   }
 
-  const missing = actors
-    .filter(a => a.playerId !== undefined && !loggedCivs.has(a.civilization))
-    .map(a => a.civilization);
-  if (missing.length === 0) return null;
+  // The old direction — "which save civs are the logs missing" — fired on
+  // eliminated civs that are in the save but absent from the last turn's stats.
+  // Flip it: logged civs the save doesn't know, and the save's human absent.
+  const human = actors.find(a => a.isHuman);
+  const humanMissing = human !== undefined && !loggedCivs.has(human.civilization);
 
-  return `the newest save is a different game than these logs (it plays ${missing.join(', ')}, which the logs never mention)`;
+  const saveCivs = new Set(actors.map(a => a.civilization));
+  const loggedMissingFromSave = [...loggedCivs].filter(c => !saveCivs.has(c));
+
+  if (!humanMissing && loggedMissingFromSave.length === 0) return null;
+
+  const reasons: string[] = [];
+  if (humanMissing) {
+    reasons.push(`the save's human (${human!.civilization}) is not in these logs`);
+  }
+  if (loggedMissingFromSave.length > 0) {
+    reasons.push(
+      `${loggedMissingFromSave.length} logged civ${loggedMissingFromSave.length > 1 ? 's' : ''} absent from the save`
+    );
+  }
+
+  return `the newest save is a different game than these logs (${reasons.join('; ')})`;
 }

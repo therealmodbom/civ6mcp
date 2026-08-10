@@ -92,6 +92,13 @@ export function getPlayerIdWarning(): string | null {
   return playerIdWarning;
 }
 
+/** The warning as a markdown block to prepend to formatted output, or "" when clean. */
+export function playerIdWarningBlock(): string {
+  const warning = getPlayerIdWarning();
+  if (!warning) return '';
+  return `> **Warning:** ${warning}, so scores fall back to the order civilizations appear in the logs. That order is off by one whenever Civ 6 logs the human last, which puts the right numbers under the wrong civilization.\n\n`;
+}
+
 /**
  * Player id -> civilization name.
  *
@@ -117,8 +124,20 @@ export function buildPlayerIdMap(): Map<number, string> {
   // their names. Their ids come from the same ordering that misplaces the human, so
   // keep them only where that ordering still agrees with the save on every civ the
   // save does know — otherwise unnamed ids beat confidently wrong ones.
-  const orderAgrees = [...fromSave].every(([id, civ]) => fromLogOrder.get(id) === civ);
-  return orderAgrees ? fromLogOrder : fromSave;
+  const displaced = [...fromSave].filter(([id, civ]) => fromLogOrder.get(id) !== civ);
+  if (displaced.length === 0) return fromLogOrder;
+
+  // Small displacement: fix only the affected major civs and keep city-state names
+  // for the rest. The common case is one displaced civ — the human logged last.
+  if (displaced.length <= 2) {
+    const reconciled = new Map(fromLogOrder);
+    for (const [id, civ] of displaced) {
+      reconciled.set(id, civ);
+    }
+    return reconciled;
+  }
+
+  return fromSave;
 }
 
 // Get civilization name from player ID
