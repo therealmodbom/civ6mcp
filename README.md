@@ -48,8 +48,13 @@ An MCP (Model Context Protocol) server that provides Claude with real-time acces
 The MCP server reads data from Civilization VI's log files. You need to enable logging:
 
 1. Find your `UserOptions.txt` file:
-   - **macOS**: `~/Library/Application Support/Sid Meier's Civilization VI/UserOptions.txt`
+   - **macOS**: `~/Library/Application Support/Sid Meier's Civilization VI/Firaxis Games/Sid Meier's Civilization VI/UserOptions.txt`
    - **Windows**: `%LOCALAPPDATA%\Firaxis Games\Sid Meier's Civilization VI\UserOptions.txt`
+
+   Civ VI has moved this file between updates, so older installs may keep it elsewhere —
+   `~/Library/Application Support/Sid Meier's Civilization VI/` on macOS, or
+   `%USERPROFILE%\Documents\My Games\Sid Meier's Civilization VI\` on Windows. The server
+   probes these locations and names the one it finds in its error messages.
 
 2. Add or modify this line:
    ```
@@ -77,6 +82,28 @@ Add this to your Claude Desktop configuration file:
 ```
 
 Replace `/path/to/civ6mcp` with the actual path to where you cloned the repository.
+
+## HTTP Transport (Optional)
+
+Claude Desktop spawns the server itself over stdio, so it has to run on the same machine as the game. For a client that cannot do that, `npm run start:http` serves the same tools over Streamable HTTP at `/mcp`.
+
+```bash
+npm run build
+npm run start:http
+```
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PORT` | `8000` | Port to listen on |
+| `MCP_ALLOWED_HOSTS` | — | Extra `Host` header values to accept, comma-separated (for example `civ6.tail1234.ts.net`) |
+| `MCP_ALLOWED_ORIGINS` | — | `Origin` values to accept, comma-separated. Unset means the `Origin` header is not checked |
+| `MCP_SESSION_IDLE_MS` | `1800000` | Close a session after this long without activity. Minimum `1000`. Also the idle delay before a silent connection is probed |
+
+The server binds `127.0.0.1` only and has no authentication of its own. Put a proxy in front of it — `tailscale serve` for instance — and name that proxy's hostname in `MCP_ALLOWED_HOSTS`. Do not expose the port itself.
+
+`MCP_ALLOWED_ORIGINS` is not a way to let a web page talk to the server. No CORS headers are sent and a preflight `OPTIONS /mcp` is rejected, so a browser blocks the call whatever the variable says. It only narrows which non-browser clients may send an `Origin` header, which is why leaving it unset is the sensible default. Serving a browser client would mean CORS on a loopback endpoint that has no authentication of its own, and that is the proxy's job, not this server's.
+
+A client that disappears without closing its connection — a laptop that sleeps, a network that drops — keeps its session alive until the connection is probed and found dead. Closing that dead connection then starts a fresh idle window before the sweep reclaims the session, so the worst case is about two times `MCP_SESSION_IDLE_MS` plus the operating system's keepalive budget (ten minutes on macOS defaults) plus one sweep interval — roughly seventy-one minutes at the defaults. Sessions are held in memory only; restarting the server clears them.
 
 ## Claude Project Setup (Recommended)
 
