@@ -120,24 +120,21 @@ export function buildPlayerIdMap(): Map<number, string> {
   );
   if (fromSave.size === 0) return fromLogOrder;
 
-  // City-states never reach the save's CIVS list, so the logs are the only source for
-  // their names. Their ids come from the same ordering that misplaces the human, so
-  // keep them only where that ordering still agrees with the save on every civ the
-  // save does know — otherwise unnamed ids beat confidently wrong ones.
-  const displaced = [...fromSave].filter(([id, civ]) => fromLogOrder.get(id) !== civ);
-  if (displaced.length === 0) return fromLogOrder;
-
-  // Small displacement: fix only the affected major civs and keep city-state names
-  // for the rest. The common case is one displaced civ — the human logged last.
-  if (displaced.length <= 2) {
-    const reconciled = new Map(fromLogOrder);
-    for (const [id, civ] of displaced) {
-      reconciled.set(id, civ);
-    }
-    return reconciled;
+  // City-states never reach the save's CIVS list, so the logs are the only source
+  // for their names. The human logged last displaces every id, not one — checking
+  // a displacement count against a threshold misses the common case entirely.
+  // Instead: use the save for every major-civ position, then layer city-state
+  // names from the log order for non-save positions. FREE_CITIES is excluded
+  // because its real id is 62/63, not its log position.
+  const saveCivs = new Set(fromSave.values());
+  const result = new Map(fromSave);
+  for (const [id, civ] of fromLogOrder) {
+    if (fromSave.has(id)) continue;       // save already covers this position
+    if (saveCivs.has(civ)) continue;       // this civ is already at its correct position
+    if (civ === 'FREE_CITIES') continue;   // real id 62/63, not this log position
+    result.set(id, civ);
   }
-
-  return fromSave;
+  return result;
 }
 
 // Get civilization name from player ID

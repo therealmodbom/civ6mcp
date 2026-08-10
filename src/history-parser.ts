@@ -316,12 +316,13 @@ export function parseGameHistory(): GameHistory | null {
       .map(a => [a.civilization, a.playerId!] as const)
   );
 
-  // Only warn when the join actually lost data — a mismatch that resolves every
-  // civ is a false alarm, not a degraded table.
+  // Only warn when the join actually lost data among major civs — city-states
+  // never resolve a playerId, so counting them makes the guard always-fire.
   const mismatchWarning = saveMismatchWarning(civSet);
   if (mismatchWarning) {
-    const resolved = [...civSet].filter(c => playerIds.has(c));
-    if (resolved.length < civSet.size) {
+    const majorCivs = [...civSet].filter(c => !isKnownCityStateName(c));
+    const resolved = majorCivs.filter(c => playerIds.has(c));
+    if (resolved.length < majorCivs.length) {
       scoreJoinCondition = mismatchWarning;
     }
   }

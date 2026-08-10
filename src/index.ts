@@ -566,7 +566,7 @@ Once you've played a turn, try this command again.`,
         }
 
         const progress = calculateVictoryProgress(stats);
-        const formatted = playerIdWarningBlock() + formatVictoryProgress(progress);
+        const formatted = formatVictoryProgress(progress);
 
         return {
           content: [
@@ -604,7 +604,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = playerIdWarningBlock() + formatStatsComparison(stats);
+        const formatted = formatStatsComparison(stats);
 
         return {
           content: [
@@ -715,7 +715,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = playerIdWarningBlock() + formatCityProduction(production, parsed.civilization);
+        const formatted = formatCityProduction(production, parsed.civilization);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -737,7 +737,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = playerIdWarningBlock() + formatCityStatus(production, foundingStats, parsed.player_id);
+        const formatted = formatCityStatus(production, foundingStats, parsed.player_id);
         return {
           content: [{ type: 'text', text: formatted }],
         };
@@ -879,7 +879,7 @@ Once you've played a turn, try this command again.`,
           };
         }
 
-        const formatted = playerIdWarningBlock() + formatTrendAnalysis(trends);
+        const formatted = formatTrendAnalysis(trends);
         return {
           content: [{ type: 'text', text: formatted }],
         };
