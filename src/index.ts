@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  type CallToolRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import {
@@ -54,17 +57,30 @@ import {
 // In-memory storage for game context notes
 const gameContext: Map<string, string> = new Map();
 
-const server = new Server(
-  {
-    name: 'civ6mcp',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
+/**
+ * A fresh Server per caller. The MCP SDK binds one Server to one transport, so a
+ * shared instance would serve a single client at a time — the second client's
+ * initialize is rejected while the first session is open. Handlers are stateless;
+ * the only shared state is `gameContext` above, which is deliberately global so
+ * notes set by one client are visible to the next.
+ */
+export function createServer(): Server {
+  const server = new Server(
+    {
+      name: 'civ6mcp',
+      version: '1.0.0',
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+      },
+    }
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, listTools);
+  server.setRequestHandler(CallToolRequestSchema, callTool);
+  return server;
+}
 
 // Define tool schemas
 const ListSavesSchema = z.object({
@@ -135,7 +151,7 @@ const GetTrendAnalysisSchema = z.object({
 });
 
 // List available tools
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+const listTools = async () => {
   return {
     tools: [
       {
@@ -373,10 +389,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     ],
   };
-});
+};
 
 // Handle tool calls
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callTool = async (request: CallToolRequest) => {
   const { name, arguments: args } = request.params;
 
   try {
@@ -883,16 +899,30 @@ Once you've played a turn, try this command again.`,
       isError: true,
     };
   }
-});
+};
 
-// Start the server
+// Start the server on stdio — only when run directly, so http.ts can import the factory
 async function main() {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await createServer().connect(transport);
   console.error('Civ6 MCP Server running on stdio');
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// Node leaves argv[1] as typed, so resolve it the way an import would — through a
+// directory's package main (`node .`), a missing extension (`node dist/index`) and
+// symlinks — before comparing it with this module's URL.
+let entryUrl = '';
+try {
+  if (process.argv[1]) {
+    entryUrl = pathToFileURL(createRequire(import.meta.url).resolve(process.argv[1])).href;
+  }
+} catch {
+  // argv[1] does not resolve to a module — then it is not this one
+}
+
+if (entryUrl === import.meta.url) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
