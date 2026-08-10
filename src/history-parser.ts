@@ -310,17 +310,21 @@ export function parseGameHistory(): GameHistory | null {
   // Player_Stats.csv identifies a row by civilization, Game_PlayerScores.csv by
   // player id, so the two are joined through the save's slot order. Only major
   // civs get an id from it, which is what the rankings need; city-states score 0.
+  const actors = getCurrentGameActors();
   const playerIds = new Map(
-    getCurrentGameActors()
+    actors
       .filter(a => a.playerId !== undefined)
       .map(a => [a.civilization, a.playerId!] as const)
   );
 
   // Only warn when the join actually lost data among major civs — city-states
   // never resolve a playerId, so counting them makes the guard always-fire.
+  // Classify with isFullCiv from the save (canonical), not the hardcoded name
+  // list that is documented as unable to be complete.
+  const isFullCiv = new Map(actors.map(a => [a.civilization, a.isFullCiv]));
   const mismatchWarning = saveMismatchWarning(civSet);
   if (mismatchWarning) {
-    const majorCivs = [...civSet].filter(c => !isKnownCityStateName(c));
+    const majorCivs = [...civSet].filter(c => isFullCiv.get(c) ?? false);
     const resolved = majorCivs.filter(c => playerIds.has(c));
     if (resolved.length < majorCivs.length) {
       scoreJoinCondition = mismatchWarning;

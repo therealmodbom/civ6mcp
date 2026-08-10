@@ -121,18 +121,23 @@ export function buildPlayerIdMap(): Map<number, string> {
   if (fromSave.size === 0) return fromLogOrder;
 
   // City-states never reach the save's CIVS list, so the logs are the only source
-  // for their names. The human logged last displaces every id, not one — checking
-  // a displacement count against a threshold misses the common case entirely.
-  // Instead: use the save for every major-civ position, then layer city-state
-  // names from the log order for non-save positions. FREE_CITIES is excluded
-  // because its real id is 62/63, not its log position.
+  // for their names. The human logged last displaces every id, not one. Use the
+  // save for majors, then place city-states sequentially from the log order at
+  // positions after the save's majors — removing the human from the log tail
+  // shifts every city-state forward by exactly one position.
   const saveCivs = new Set(fromSave.values());
   const result = new Map(fromSave);
-  for (const [id, civ] of fromLogOrder) {
-    if (fromSave.has(id)) continue;       // save already covers this position
+  const cityStates: string[] = [];
+  for (const [_id, civ] of fromLogOrder) {
     if (saveCivs.has(civ)) continue;       // this civ is already at its correct position
     if (civ === 'FREE_CITIES') continue;   // real id 62/63, not this log position
-    result.set(id, civ);
+    cityStates.push(civ);
+  }
+  let nextId = fromSave.size;
+  for (const civ of cityStates) {
+    while (result.has(nextId)) nextId++;
+    result.set(nextId, civ);
+    nextId++;
   }
   return result;
 }
