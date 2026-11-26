@@ -1,5 +1,14 @@
 # Civilization VI MCP Server
 
+## What this fork adds
+
+This is a fork of [lowrykun/civ6mcp](https://github.com/lowrykun/civ6mcp), the Civilization VI MCP server by lowrykun. It adds an HTTP transport and makes the game data the tools report more reliable.
+
+- A Streamable HTTP entry point next to stdio, with separate MCP sessions and cleanup of idle sessions. See [HTTP Transport](#http-transport-optional).
+- Uses save-file actor records to identify the human player and match scores to civilizations, with warnings when save data is missing or does not match the logs.
+- Skips actor parsing for saves under 200 kB to avoid a parser hang seen with truncated files. Looks for `UserOptions.txt` in several known locations.
+- An updated dependency lockfile, which cleared the 10 `npm audit` advisories reported at the time.
+
 An MCP (Model Context Protocol) server that provides Claude with real-time access to your Civilization VI game data. Get strategic analysis, diplomatic intelligence, military assessments, and more by connecting Claude to your active game.
 
 ## Features
@@ -29,7 +38,7 @@ An MCP (Model Context Protocol) server that provides Claude with real-time acces
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/lowrykun/civ6mcp.git
+   git clone https://github.com/therealmodbom/civ6mcp.git
    cd civ6mcp
    ```
 
